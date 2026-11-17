@@ -33,14 +33,18 @@ import TideEnglishCore
             // Keep the original directory so a brand update preserves existing learning data.
             .appendingPathComponent("Tide English", isDirectory: true)
             .appendingPathComponent("vocabulary-definitions-v1.json")
+        migrationBackupURL = inMemory ? nil : Self.supportDirectory
+            .appendingPathComponent("before-language-modules.json")
+        if !inMemory {
+            try ArchiveDeletionTransaction.recoverPending(files: [migrationBackupURL, vocabularyCacheURL].compactMap { $0 },
+                stagingRoot: Self.supportDirectory.appendingPathComponent("pending-deletions", isDirectory: true))
+        }
         if let url = vocabularyCacheURL,
            let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
            size <= 4 * 1024 * 1024,
            let data = try? Data(contentsOf: url), let cache = try? VocabularyCache.decode(data) {
             vocabularyCache = cache
         }
-        migrationBackupURL = inMemory ? nil : Self.supportDirectory
-            .appendingPathComponent("before-language-modules.json")
         container = try ModelContainer(for: StoredArchive.self, configurations: ModelConfiguration(isStoredInMemoryOnly: inMemory, cloudKitDatabase: .none))
         let context = container.mainContext
         if let existing = try context.fetch(FetchDescriptor<StoredArchive>()).first {
@@ -147,6 +151,8 @@ import TideEnglishCore
         vocabularyCache = cache
         guard let url = vocabularyCacheURL else { return }
         do {
+            try ArchiveDeletionTransaction.recoverPending(files: [migrationBackupURL, vocabularyCacheURL].compactMap { $0 },
+                stagingRoot: Self.supportDirectory.appendingPathComponent("pending-deletions", isDirectory: true))
             let data = try cache.encoded()
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: [.atomic, .completeFileProtection])

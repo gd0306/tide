@@ -361,12 +361,45 @@ public enum ArchiveDeletionTransaction {
             }
         }
     }
+    /// Restore interrupted staging before accessing side files. When a newer file already
+    /// occupies the path, keep the old copy privately until the user confirms deletion.
+    public static func recoverPending(files: [URL], stagingRoot: URL,
+                                      move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
+                                      remove: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) throws {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: stagingRoot.path) else { return }
+        for directory in try manager.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil) {
+            if manager.fileExists(atPath: directory.appendingPathComponent("committed").path) { continue }
+            do {
+                var hasConflict = false
+                for (index, original) in files.enumerated() {
+                    let staged = directory.appendingPathComponent(String(index))
+                    if manager.fileExists(atPath: staged.path) {
+                        if manager.fileExists(atPath: original.path) { hasConflict = true }
+                        else { try move(staged, original) }
+                    }
+                }
+                let marker = directory.appendingPathComponent("recovery-copy")
+                if hasConflict {
+                    if !manager.fileExists(atPath: marker.path) { try Data().write(to: marker, options: .atomic) }
+                } else if manager.fileExists(atPath: marker.path) { try remove(marker) }
+                if try manager.contentsOfDirectory(atPath: directory.path).isEmpty { try remove(directory) }
+            } catch { throw Failure.rollbackFailed }
+        }
+    }
     public static func run(files: [URL], stagingRoot: URL,
                            move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
                            remove: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) },
                            commit: () throws -> Void) throws {
         let manager = FileManager.default
         try manager.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
+        try recoverPending(files: files, stagingRoot: stagingRoot, move: move, remove: remove)
+        var retained: [URL] = []
+        for directory in try manager.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil) {
+            if manager.fileExists(atPath: directory.appendingPathComponent("committed").path) {
+                do { try remove(directory) } catch { throw Failure.cleanupPending }
+            } else { retained.append(directory) }
+        }
         func restore(_ directory: URL) throws {
             for (index, original) in files.enumerated() {
                 let staged = directory.appendingPathComponent(String(index))
@@ -376,13 +409,6 @@ public enum ArchiveDeletionTransaction {
                 }
             }
             try remove(directory)
-        }
-        for directory in try manager.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil) {
-            if manager.fileExists(atPath: directory.appendingPathComponent("committed").path) {
-                do { try remove(directory) } catch { throw Failure.cleanupPending }
-            } else {
-                do { try restore(directory) } catch { throw Failure.rollbackFailed }
-            }
         }
         let directory = stagingRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try manager.createDirectory(at: directory, withIntermediateDirectories: false)
@@ -397,8 +423,9 @@ public enum ArchiveDeletionTransaction {
             throw originalError
         }
         do {
-            try Data().write(to: directory.appendingPathComponent("committed"), options: .atomic)
-            try remove(directory)
+            let completed = [directory] + retained
+            for item in completed { try Data().write(to: item.appendingPathComponent("committed"), options: .atomic) }
+            for item in completed { try remove(item) }
         } catch { throw Failure.cleanupPending }
     }
 }
