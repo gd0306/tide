@@ -26,6 +26,8 @@ notices = add('notices','PBXFileReference',lastKnownFileType='text',path='Applic
 refs.append(notices)
 privacy = add('privacy','PBXFileReference',lastKnownFileType='text.xml',path='Application/PrivacyInfo.xcprivacy',sourceTree='<group>')
 refs.append(privacy)
+publicInformation = add('publicInformation','PBXFileReference',lastKnownFileType='text.json',path='Application/PublicInformation.json',sourceTree='<group>')
+refs.append(publicInformation)
 localizedInfo = []
 for locale in ['en', 'zh-Hans']:
     localizedInfo.append(add('info-' + locale, 'PBXFileReference', lastKnownFileType='text.plist.strings', name=locale, path=f'Application/{locale}.lproj/InfoPlist.strings', sourceTree='<group>'))
@@ -45,7 +47,7 @@ core = add('core','XCSwiftPackageProductDependency',package=corePackage,productN
 rtc = add('rtc','XCSwiftPackageProductDependency',package=rtcPackage,productName='WebRTC')
 frameworks = add('frameworks','PBXFrameworksBuildPhase',buildActionMask=2147483647,files=[add('coreBuild','PBXBuildFile',productRef=core),add('rtcBuild','PBXBuildFile',productRef=rtc)],runOnlyForDeploymentPostprocessing=0)
 sourcePhase = add('sources','PBXSourcesBuildPhase',buildActionMask=2147483647,files=sources,runOnlyForDeploymentPostprocessing=0)
-resources = add('resources','PBXResourcesBuildPhase',buildActionMask=2147483647,files=[add('infoStringsBuild','PBXBuildFile',fileRef=infoStrings),add('assetsBuild','PBXBuildFile',fileRef=asset),add('noticesBuild','PBXBuildFile',fileRef=notices),add('privacyBuild','PBXBuildFile',fileRef=privacy)],runOnlyForDeploymentPostprocessing=0)
+resources = add('resources','PBXResourcesBuildPhase',buildActionMask=2147483647,files=[add('infoStringsBuild','PBXBuildFile',fileRef=infoStrings),add('assetsBuild','PBXBuildFile',fileRef=asset),add('noticesBuild','PBXBuildFile',fileRef=notices),add('privacyBuild','PBXBuildFile',fileRef=privacy),add('publicInformationBuild','PBXBuildFile',fileRef=publicInformation)],runOnlyForDeploymentPostprocessing=0)
 common = {'SDKROOT':'iphoneos','IPHONEOS_DEPLOYMENT_TARGET':'26.1','SWIFT_VERSION':'5.0','CLANG_ENABLE_MODULES':'YES','CLANG_ENABLE_OBJC_ARC':'YES','SWIFT_STRICT_CONCURRENCY':'targeted'}
 targetSettings = {'PRODUCT_BUNDLE_IDENTIFIER':'cn.gd306.tideenglish.ios','PRODUCT_NAME':'$(TARGET_NAME)','TARGETED_DEVICE_FAMILY':'1','GENERATE_INFOPLIST_FILE':'NO','INFOPLIST_FILE':'Application/Info.plist','CODE_SIGN_STYLE':'Automatic','MARKETING_VERSION':'1.0','CURRENT_PROJECT_VERSION':'1','ASSETCATALOG_COMPILER_APPICON_NAME':'AppIcon','ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME':'AccentColor','LD_RUNPATH_SEARCH_PATHS':['$(inherited)','@executable_path/Frameworks'],'ENABLE_PREVIEWS':'YES','SUPPORTED_PLATFORMS':'iphoneos iphonesimulator'}
 targetSettings.update({'CODE_SIGN_ENTITLEMENTS':'$(TIDE_ENGLISH_APPLE_ENTITLEMENTS)',

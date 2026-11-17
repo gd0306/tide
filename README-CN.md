@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/iOS-17.0%2B%20%7C%20Swift%206-orange?logo=apple" alt="iOS" />
+  <img src="https://img.shields.io/badge/iOS-26.1%2B%20%7C%20Swift%206-orange?logo=apple" alt="iOS" />
   <img src="https://img.shields.io/badge/Android-8.0%2B%20%7C%20Compose-green?logo=android" alt="Android" />
   <img src="https://img.shields.io/badge/Privacy-Local--First%20%2F%20BYOK-blue" alt="Privacy" />
   <img src="https://img.shields.io/badge/License-MIT-purple.svg" alt="License" />
@@ -226,7 +226,7 @@ swift test --package-path mobile/ios
 
 - **独立沙箱隔离**：本工程使用独立的应用标识（Bundle ID: `cn.gd306.tideenglish.*`），拥有完全隔离的本地沙箱存储，不会与其他应用或历史版本的本地数据、密钥发生冲突。
 - **数据迁移指引**：如需从历史版本或其他设备迁移学习数据，只需在原应用内导出本地学习备份（JSON 文件），并在本应用内通过手动导入功能恢复；模型 API Key 需在安装后重新填写。请勿通过卸载应用来解决签名冲突，以免丢失本地数据。
-- **离线自主运行**：核心学习功能（对话、词汇、翻译、复习）不依赖任何自建云端服务或用户登录体系，只需填写模型密钥即可完全离线自主运行。
+- **本地优先与联网范围**：查看已保存的词汇和对话不需要联网。AI 对话、翻译与新释义需要连接所选模型服务；个人 Key 模式不依赖自建账户或托管服务器。
 
 ---
 
@@ -241,3 +241,5 @@ swift test --package-path mobile/ios
 
 本项目遵循 [MIT License](LICENSE) 开源协议，并严格保留原始版权归属与第三方致谢声明。
 详细信息请参阅 [NOTICE](NOTICE)，参与代码贡献请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)，安全问题报告请查阅 [SECURITY.md](SECURITY.md)。
+
+中国大陆 iOS 首发的配置、页面准备与发行检查见 [发行准备指南](distribution/ios/README.md)。默认配置是未完成备案与主体信息的开发草稿，不代表已获上架批准。

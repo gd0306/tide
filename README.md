@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/iOS-17.0%2B%20%7C%20Swift%206-orange?logo=apple" alt="iOS" />
+  <img src="https://img.shields.io/badge/iOS-26.1%2B%20%7C%20Swift%206-orange?logo=apple" alt="iOS" />
   <img src="https://img.shields.io/badge/Android-8.0%2B%20%7C%20Compose-green?logo=android" alt="Android" />
   <img src="https://img.shields.io/badge/Privacy-Local--First%20%2F%20BYOK-blue" alt="Privacy" />
   <img src="https://img.shields.io/badge/License-MIT-purple.svg" alt="License" />
@@ -238,3 +238,5 @@ Tide was previously named Tide English. The public repository is now [`gd0306/ti
 
 This project is licensed under the [MIT License](LICENSE), retaining original copyright and third-party notices.
 See [NOTICE](NOTICE) for provenance, [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, and [SECURITY.md](SECURITY.md) for security vulnerability reporting.
+
+For the mainland-China iOS release profile, public-page preparation and offline readiness checks, see [the release guide](distribution/ios/README.md). The checked-in draft does not represent approved filings or a published release.
