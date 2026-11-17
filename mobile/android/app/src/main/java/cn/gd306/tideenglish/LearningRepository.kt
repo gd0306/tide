@@ -14,6 +14,11 @@ import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import java.io.File
 import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 
 /** App-private archive; API credentials are deliberately kept elsewhere. */
 data class LearningSnapshot(val archive: Archive, val finalAssessments: List<FinalAssessmentTicket> = emptyList())
@@ -71,4 +76,84 @@ internal fun importSnapshot(current: LearningSnapshot, data: String, write: (Lea
     val candidate = current.copy(archive = ArchiveCodec.merge(current.archive, prepareImportedArchive(data)))
     write(candidate)
     return candidate
+}
+
+/** Serializes ordinary snapshots and critical operations on the owning coroutine dispatcher. */
+internal class LearningWriteQueue(
+    scope: CoroutineScope,
+    private val current: () -> LearningSnapshot,
+    private val publish: (LearningSnapshot) -> Unit,
+    private val blocked: () -> Boolean,
+    private val write: suspend (LearningSnapshot) -> Unit,
+    private val writeCritical: (LearningSnapshot) -> Unit,
+    private val onError: (Exception) -> Unit,
+) {
+    private data class Request(val snapshot: LearningSnapshot?, val completion: CompletableDeferred<Unit>? = null,
+        val importData: String? = null, val mutation: ((LearningSnapshot) -> LearningSnapshot)? = null,
+        val onCommit: (() -> Unit)? = null) {
+        val critical get() = importData != null || mutation != null
+    }
+    private val writes = Channel<Request>(Channel.UNLIMITED)
+    init { scope.launch {
+        var carry: Request? = null
+        while (true) {
+            val request = carry ?: writes.receiveCatching().getOrNull() ?: break
+            carry = null
+            if (request.critical) {
+                val pending = mutableListOf<Request>()
+                while (true) {
+                    val next = writes.tryReceive().getOrNull() ?: break
+                    if (next.critical) { carry = next; break }
+                    pending += next
+                }
+                try {
+                    check(!blocked())
+                    val candidate = if (request.importData != null) importSnapshot(current(), request.importData, writeCritical)
+                        else requireNotNull(request.mutation)(current()).also(writeCritical)
+                    publish(candidate)
+                    request.onCommit?.invoke()
+                    request.completion?.complete(Unit)
+                    pending.forEach { it.completion?.complete(Unit) }
+                } catch (error: Exception) {
+                    request.completion?.completeExceptionally(error)
+                    val latest = pending.lastOrNull()?.snapshot
+                    if (latest != null) {
+                        try { writeCritical(latest); pending.forEach { it.completion?.complete(Unit) } }
+                        catch (failure: Exception) { pending.forEach { it.completion?.completeExceptionally(failure) } }
+                    }
+                }
+            } else {
+                var latest = request
+                val completions = mutableListOf<CompletableDeferred<Unit>>()
+                request.completion?.let(completions::add)
+                while (true) {
+                    val next = writes.tryReceive().getOrNull() ?: break
+                    if (next.critical) { carry = next; break }
+                    latest = next
+                    next.completion?.let(completions::add)
+                }
+                try {
+                    write(requireNotNull(latest.snapshot))
+                    completions.forEach { it.complete(Unit) }
+                } catch (error: Exception) {
+                    completions.forEach { it.completeExceptionally(error) }
+                    if (error is CancellationException) throw error
+                    onError(error)
+                }
+            }
+        }
+    } }
+    fun persist(snapshot: LearningSnapshot) { writes.trySend(Request(snapshot)) }
+    suspend fun persistAndWait(snapshot: LearningSnapshot) {
+        val completion = CompletableDeferred<Unit>()
+        writes.send(Request(snapshot, completion)); completion.await()
+    }
+    suspend fun importData(data: String) {
+        val completion = CompletableDeferred<Unit>()
+        writes.send(Request(null, completion, importData = data)); completion.await()
+    }
+    suspend fun mutate(mutation: (LearningSnapshot) -> LearningSnapshot, onCommit: () -> Unit) {
+        val completion = CompletableDeferred<Unit>()
+        writes.send(Request(null, completion, mutation = mutation, onCommit = onCommit)); completion.await()
+    }
 }

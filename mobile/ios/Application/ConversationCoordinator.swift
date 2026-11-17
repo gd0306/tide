@@ -781,12 +781,13 @@ import TideEnglishCore
             self.resetConversation()
         }
     }
-    private func submitFinalAssessment(_ session: SessionRecord, identity: String) {
+    @discardableResult private func submitFinalAssessment(_ session: SessionRecord, identity: String) -> Bool {
         guard hasAIConsent, conversationProvider == .personalKey,
-              CredentialStore.hasKey(configuration: modelConfiguration), !finalAssessments.isPending(session.id) else { return }
+              CredentialStore.hasKey(configuration: modelConfiguration), !finalAssessments.isPending(session.id) else { return false }
         do {
-            if try store.beginFinalAssessment(session, provider: identity) { finalAssessments.submit(session) }
-        } catch { self.error = "Tide couldn’t save your progress. Please try again." }
+            guard try store.beginFinalAssessment(session, provider: identity) else { return false }
+            return finalAssessments.submit(session)
+        } catch { self.error = "Tide couldn’t save your progress. Please try again."; return false }
     }
     func retryFinalAssessments() {
         guard hasAIConsent, conversationProvider == .personalKey,
@@ -794,10 +795,11 @@ import TideEnglishCore
               let identity = try? ProviderConsent.identity(for: modelConfiguration) else { return }
         let remaining = max(0, 5 - recoveredAssessmentIDs.count)
         guard remaining > 0 else { return }
-        for record in FinalAssessmentRecovery.recover(store.archive.sessions, tickets: store.finalAssessmentTickets, provider: identity, consent: true)
-            .filter({ !recoveredAssessmentIDs.contains($0.id) }).prefix(remaining) {
-            recoveredAssessmentIDs.insert(record.id)
-            submitFinalAssessment(record, identity: identity)
+        let pending = Set(store.finalAssessmentTickets.map(\.sessionID).filter { finalAssessments.isPending($0) })
+        for record in FinalAssessmentRecovery.recover(store.archive.sessions, tickets: store.finalAssessmentTickets, provider: identity, consent: true,
+            excluding: recoveredAssessmentIDs.union(pending), limit: store.finalAssessmentTickets.count) {
+            guard recoveredAssessmentIDs.count < 5 else { break }
+            if submitFinalAssessment(record, identity: identity) { recoveredAssessmentIDs.insert(record.id) }
         }
     }
     func resume() {

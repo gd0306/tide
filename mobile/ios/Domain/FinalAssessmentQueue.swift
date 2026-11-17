@@ -102,9 +102,9 @@ public enum FinalAssessmentRecovery {
         return remaining
     }
     public static func recover(_ sessions: [SessionRecord], tickets: [FinalAssessmentTicket], provider: String,
-                               consent: Bool, now: Date = .now) -> [SessionRecord] {
+                               consent: Bool, now: Date = .now, excluding: Set<UUID> = [], limit: Int = 5) -> [SessionRecord] {
         guard consent else { return [] }
-        return tickets.filter { $0.provider == provider && (0..<3).contains($0.attempts) &&
+        return tickets.filter { !excluding.contains($0.sessionID) && $0.provider == provider && (0..<3).contains($0.attempts) &&
             now.timeIntervalSince($0.queuedAt) >= 0 && now.timeIntervalSince($0.queuedAt) <= 7 * 86400 }
             .compactMap { ticket in
                 guard let session = sessions.first(where: { $0.id == ticket.sessionID }), session.endedAt != nil,
@@ -112,6 +112,6 @@ public enum FinalAssessmentRecovery {
                       passage.id == ticket.passageID, passage.revisionKey == ticket.revisionKey, passage.text.count >= 3,
                       !session.assessments.contains(where: { $0.passageID == passage.id && $0.revisionKey == passage.revisionKey }) else { return nil }
                 return session
-            }.prefix(5).map { $0 }
+            }.prefix(max(0, limit)).map { $0 }
     }
 }

@@ -305,6 +305,8 @@ public enum InterfaceText {
         "Restore from backup": "从备份恢复",
         "Some conversation assessments are waiting or couldn’t be completed.": "部分对话评估正在等待或未能完成。",
         "Retry assessments": "重试评估",
+        "Some local files couldn’t be restored. Please try again.": "部分本地文件无法恢复，请重试。",
+        "Some local copies couldn’t be deleted. Please try again.": "部分本地副本未能删除，请重试。",
         "Review model settings": "检查模型设置",
         "A little interruption": "提示",
         "Check minutes": "查看分钟数",

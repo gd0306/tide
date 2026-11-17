@@ -62,6 +62,14 @@ import XCTest
         XCTAssertTrue(FinalAssessmentRecovery.recover(sessions, tickets: [], provider: "provider-a", consent: true, now: now).isEmpty)
     }
 
+    func testRecoveryExcludesProcessedBeforeApplyingLimit() {
+        let sessions = (0..<8).map { _ in ended() }
+        let tickets = sessions.reduce([FinalAssessmentTicket]()) { FinalAssessmentRecovery.enqueue($1, provider: "provider-a", tickets: $0) }
+        let selected = FinalAssessmentRecovery.recover(sessions, tickets: tickets, provider: "provider-a", consent: true,
+            now: Date(), excluding: Set(sessions.prefix(5).map(\.id)), limit: 2)
+        XCTAssertEqual(selected.map(\.id), sessions[5...6].map(\.id))
+    }
+
     func testResetAndNewLanguageDoNotRedirectResultsToTheNewSession() async {
         let old = ended(), new = ended("fr"), provider = Provider()
         var records = [old.id: old, new.id: new]

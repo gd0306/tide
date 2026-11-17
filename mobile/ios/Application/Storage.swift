@@ -107,29 +107,28 @@ import TideEnglishCore
         persist()
     }
     func deleteAll() {
-        if let migrationBackupURL {
-            do { try FileManager.default.removeItem(at: migrationBackupURL) }
-            catch CocoaError.fileNoSuchFile { /* Most installations have no migration backup. */ }
-            catch {
-                self.error = "Tide couldn’t delete the older learning backup. Your conversations are still here. Please try again."
-                return
-            }
-        }
-        archive.sessions.forEach { onSessionInvalidation?($0.id) }
-        if let vocabularyCacheURL {
-            do { try FileManager.default.removeItem(at: vocabularyCacheURL) }
-            catch CocoaError.fileNoSuchFile { }
-            catch {
-                self.error = "Saved definitions couldn’t be deleted. Your learning data is still here. Please try again."
-                return
-            }
-        }
-        vocabularyCache.removeAll(); vocabularyCacheError = nil
-        onVocabularyErase?()
+        let ids = archive.sessions.map(\.id)
         var candidate = archive
         candidate.sessions = []; candidate.preferences.hiddenWords = []
-        do { try commit(candidate, tickets: []) }
-        catch { self.error = "Tide couldn’t save your progress. Please export a backup and try again." }
+        var committed = false
+        do {
+            let files = [migrationBackupURL, vocabularyCacheURL].compactMap { $0 }
+            if files.isEmpty {
+                try commit(candidate, tickets: []); committed = true
+            } else {
+                try ArchiveDeletionTransaction.run(files: files, stagingRoot: Self.supportDirectory.appendingPathComponent("pending-deletions", isDirectory: true)) {
+                    try commit(candidate, tickets: [])
+                    committed = true
+                }
+            }
+        } catch {
+            self.error = error.localizedDescription
+        }
+        if committed {
+            ids.forEach { onSessionInvalidation?($0) }
+            vocabularyCache.removeAll(); vocabularyCacheError = nil
+            onVocabularyErase?()
+        }
     }
     func exportData() throws -> Data { try archive.encoded() }
     func importData(_ data: Data) throws {

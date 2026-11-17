@@ -11,7 +11,6 @@ import cn.gd306.tideenglish.core.*
 import cn.gd306.tideenglish.network.*
 import java.util.UUID
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
@@ -267,9 +266,11 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     fun submitReport(report: AIReportSubmission) = reports.submit(report)
     fun dismissReport() = reports.dismiss()
 
-    private data class SaveRequest(val snapshot: LearningSnapshot?, val completion: CompletableDeferred<Unit>? = null, val importData: String? = null, val mutation: ((LearningSnapshot) -> LearningSnapshot)? = null, val onCommit: (() -> Unit)? = null)
     private var importing = false
-    private val writes = Channel<SaveRequest>(Channel.UNLIMITED)
+    private val writes = LearningWriteQueue(viewModelScope, ::persistenceSnapshot,
+        { archive = it.archive; finalAssessmentTickets = it.finalAssessments }, { isRunning },
+        { snapshot -> withContext(Dispatchers.IO) { repository.save(snapshot) } }, repository::save,
+        { presentError(localizedContext().getString(R.string.error_save_progress_failed)) })
     private var storageReady = false
     private var finalAssessmentTickets: List<FinalAssessmentTicket> = emptyList()
     private val recoveredAssessmentIDs = mutableSetOf<String>()
@@ -337,60 +338,6 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
             catch (_: Exception) {
                 presentError(localizedContext().getString(R.string.error_local_history_unavailable))
             } finally { loadingHistory = false }
-        }
-        viewModelScope.launch {
-            var carry: SaveRequest? = null
-            while (true) {
-                val request = carry ?: writes.receiveCatching().getOrNull() ?: break
-                carry = null
-                if (request.importData != null || request.mutation != null) {
-                    // Drain snapshots captured while an earlier IO write was in flight. They are
-                    // reflected in the current main-thread state and must not overwrite the import.
-                    val pending = mutableListOf<SaveRequest>()
-                    while (true) {
-                        val next = writes.tryReceive().getOrNull() ?: break
-                        if (next.importData != null || next.mutation != null) { carry = next; break }
-                        pending += next
-                    }
-                    try {
-                        // This short critical section deliberately does not suspend: no UI mutation
-                        // can create a stale snapshot between writing and publishing the candidate.
-                        check(!isRunning)
-                        val imported = if (request.importData != null) importSnapshot(persistenceSnapshot(), request.importData, repository::save)
-                            else requireNotNull(request.mutation)(persistenceSnapshot()).also(repository::save)
-                        archive = imported.archive
-                        finalAssessmentTickets = imported.finalAssessments
-                        request.onCommit?.invoke()
-                        request.completion?.complete(Unit)
-                        pending.forEach { it.completion?.complete(Unit) }
-                    } catch (error: Exception) {
-                        request.completion?.completeExceptionally(error)
-                        val latest = pending.lastOrNull()?.snapshot
-                        if (latest != null) {
-                            try { repository.save(latest); pending.forEach { it.completion?.complete(Unit) } }
-                            catch (failure: Exception) { pending.forEach { it.completion?.completeExceptionally(failure) } }
-                        }
-                    }
-                } else {
-                    var latest = request
-                    val completions = mutableListOf<CompletableDeferred<Unit>>()
-                    request.completion?.let(completions::add)
-                    while (true) {
-                        val next = writes.tryReceive().getOrNull() ?: break
-                        if (next.importData != null || next.mutation != null) { carry = next; break }
-                        latest = next
-                        next.completion?.let(completions::add)
-                    }
-                    try {
-                        withContext(Dispatchers.IO) { repository.save(requireNotNull(latest.snapshot)) }
-                        completions.forEach { it.complete(Unit) }
-                    } catch (error: Exception) {
-                        completions.forEach { it.completeExceptionally(error) }
-                        if (error is CancellationException) throw error
-                        presentError(localizedContext().getString(R.string.error_save_progress_failed))
-                    }
-                }
-            }
         }
         transport.onEvent = { event ->
             try { handle(event) }
@@ -470,13 +417,11 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         finalAssessmentTickets.toList(),
     )
     private fun persist() {
-        if (storageReady) writes.trySend(SaveRequest(persistenceSnapshot()))
+        if (storageReady) writes.persist(persistenceSnapshot())
     }
     private suspend fun persistAndWait() {
         check(storageReady)
-        val completion = CompletableDeferred<Unit>()
-        writes.send(SaveRequest(persistenceSnapshot(), completion))
-        completion.await()
+        writes.persistAndWait(persistenceSnapshot())
     }
     private fun save(s: SessionRecord) {
         finalAssessmentTickets = ConversationProviderPolicy.enqueueRecovery(s, finalAssessmentTickets, hostedSessionIDs)
@@ -1418,16 +1363,14 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     suspend fun deleteSession(id: String) {
         if (isRunning || !storageReady) return
         try {
-            val completion = CompletableDeferred<Unit>()
-            writes.send(SaveRequest(null, completion, mutation = { current ->
+            writes.mutate(mutation = { current ->
                 current.copy(archive = current.archive.copy(sessions = current.archive.sessions.filterNot { it.id == id }.toMutableList()),
                     finalAssessments = current.finalAssessments.filterNot { it.sessionID == id })
             }, onCommit = {
                 if (reportState.value.selection?.sessionID == id) reports.dismiss()
                 finalAssessments.cancel(id); hostedFinalAssessmentJobs.remove(id)?.cancel(); hostedBindings.forgetLearning(id)
                 if (session?.id == id) resetConversation()
-            }))
-            completion.await()
+            })
         } catch (error: CancellationException) { throw error }
         catch (_: Exception) { presentError(localizedContext().getString(R.string.error_save_progress_failed)) }
     }
@@ -1445,8 +1388,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     suspend fun deleteLearningData() {
         if (isRunning || !storageReady) return
         try {
-            val completion = CompletableDeferred<Unit>()
-            writes.send(SaveRequest(null, completion, mutation = { current ->
+            writes.mutate(mutation = { current ->
                 current.copy(archive = current.archive.copy(sessions = mutableListOf(),
                     preferences = current.archive.preferences.copy(hiddenWords = emptyList())), finalAssessments = emptyList())
             }, onCommit = {
@@ -1455,8 +1397,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
                 learningDataGeneration++
                 finalAssessments.cancelAll(); hostedSessionIDs.forEach(hostedBindings::forgetLearning)
                 hostedFinalAssessmentJobs.values.toList().forEach { it.cancel() }; hostedFinalAssessmentJobs.clear(); resetConversation()
-            }))
-            completion.await()
+            })
         } catch (error: CancellationException) { throw error }
         catch (_: Exception) { presentError(localizedContext().getString(R.string.error_save_progress_failed)) }
     }
@@ -1465,9 +1406,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         if (isRunning || !storageReady || importing) return false
         importing = true
         return try {
-            val completion = CompletableDeferred<Unit>()
-            writes.send(SaveRequest(null, completion, data))
-            completion.await()
+            writes.importData(data)
             notice = localizedContext().getString(R.string.notice_backup_imported)
             true
         } catch (error: CancellationException) { throw error }

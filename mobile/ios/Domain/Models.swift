@@ -349,3 +349,56 @@ public enum ArchiveRecoveryExport {
         return try JSONSerialization.data(withJSONObject: root)
     }
 }
+
+/// Stages private files before committing archive deletion; abandoned staging is retried safely.
+public enum ArchiveDeletionTransaction {
+    public enum Failure: LocalizedError {
+        case rollbackFailed, cleanupPending
+        public var errorDescription: String? {
+            switch self {
+            case .rollbackFailed: "Some local files couldn’t be restored. Please try again."
+            case .cleanupPending: "Some local copies couldn’t be deleted. Please try again."
+            }
+        }
+    }
+    public static func run(files: [URL], stagingRoot: URL,
+                           move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
+                           remove: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) },
+                           commit: () throws -> Void) throws {
+        let manager = FileManager.default
+        try manager.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
+        func restore(_ directory: URL) throws {
+            for (index, original) in files.enumerated() {
+                let staged = directory.appendingPathComponent(String(index))
+                if manager.fileExists(atPath: staged.path) {
+                    guard !manager.fileExists(atPath: original.path) else { throw Failure.rollbackFailed }
+                    try move(staged, original)
+                }
+            }
+            try remove(directory)
+        }
+        for directory in try manager.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil) {
+            if manager.fileExists(atPath: directory.appendingPathComponent("committed").path) {
+                do { try remove(directory) } catch { throw Failure.cleanupPending }
+            } else {
+                do { try restore(directory) } catch { throw Failure.rollbackFailed }
+            }
+        }
+        let directory = stagingRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try manager.createDirectory(at: directory, withIntermediateDirectories: false)
+        do {
+            for (index, original) in files.enumerated() where manager.fileExists(atPath: original.path) {
+                try move(original, directory.appendingPathComponent(String(index)))
+            }
+            try commit()
+        } catch {
+            let originalError = error
+            do { try restore(directory) } catch { throw Failure.rollbackFailed }
+            throw originalError
+        }
+        do {
+            try Data().write(to: directory.appendingPathComponent("committed"), options: .atomic)
+            try remove(directory)
+        } catch { throw Failure.cleanupPending }
+    }
+}
