@@ -13,8 +13,24 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.Assert.assertThrows
+import java.io.IOException
 
 class TideEnglishViewModelTest {
+    @Test fun importWritesCandidateBeforePublishingAndRollsBackFailure() {
+        val original = LearningSnapshot(Archive())
+        val incoming = Archive(sessions = mutableListOf(SessionRecord(languageID = "es")))
+        var current = original
+        assertThrows(IOException::class.java) {
+            current = importSnapshot(original, ArchiveCodec.encode(incoming)) { throw IOException("disk full") }
+        }
+        assertEquals(0, current.archive.sessions.size)
+        var saved: LearningSnapshot? = null
+        current = importSnapshot(original, ArchiveCodec.encode(incoming)) { saved = it }
+        assertEquals(1, current.archive.sessions.size)
+        assertEquals(1, ArchiveCodec.decode(ArchiveCodec.encode(saved!!.archive)).sessions.size)
+    }
+
     @Test fun importedUnfinishedHistoryCannotLookLikeALocalInterruptedSession() {
         val partial = SessionRecord(languageID = "es", startedAt = 800_000_000.0).apply {
             append(Fragment(speaker = Speaker.user, text = "la radio", startMS = 0, endMS = 1_000))

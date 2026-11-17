@@ -65,3 +65,10 @@ class LearningRepository(context: Context) {
         catch (e: Exception) { file.failWrite(stream); throw e }
     }
 }
+
+/** Publish the merged archive only after the writer commits the complete snapshot. */
+internal fun importSnapshot(current: LearningSnapshot, data: String, write: (LearningSnapshot) -> Unit): LearningSnapshot {
+    val candidate = current.copy(archive = ArchiveCodec.merge(current.archive, prepareImportedArchive(data)))
+    write(candidate)
+    return candidate
+}

@@ -669,6 +669,13 @@ private struct LearningBackupView: View {
                 Button(UI("Delete all conversations and learning"), role: .destructive) { deleting = true }
                     .disabled(coordinator.isRunning)
             } footer: { Text(UI("Backups include transcripts and learning evidence, never your API key. Import adds conversations with new IDs. Learning stays on this iPhone unless you export it.")) }
+            if !coordinator.store.finalAssessmentTickets.isEmpty {
+                Section {
+                    Text(UI("Some conversation assessments are waiting or couldn’t be completed."))
+                    Button(UI("Retry assessments")) { coordinator.retryFinalAssessments() }
+                        .disabled(coordinator.isRunning)
+                }
+            }
             if let message { Section { Text(UI(message)) } }
         }.scrollContentBackground(.hidden).background(TideEnglishColor.cream).navigationTitle(UI("Learning data"))
             .fileExporter(isPresented: $exporting, document: backup, contentType: .json, defaultFilename: "Tide-learning-backup") { result in

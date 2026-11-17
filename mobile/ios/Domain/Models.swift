@@ -320,3 +320,32 @@ public enum MinuteBalanceTime {
     }
     public static func isEligible(_ milliseconds: Int) -> Bool { milliseconds > 0 }
 }
+
+/// Builds and writes a complete import before publishing it to the caller.
+public struct ArchiveImportTransaction {
+    public private(set) var archive: Archive
+    public init(archive: Archive) { self.archive = archive }
+    public mutating func importData(_ data: Data, write: (Data) throws -> Void) throws {
+        var incoming = try Archive.decode(data)
+        for index in incoming.sessions.indices where incoming.sessions[index].endedAt == nil {
+            incoming.sessions[index].endedAt = Date()
+            incoming.sessions[index].endReason = "Imported unfinished conversation"
+        }
+        let candidate = try archive.merging(incoming)
+        try write(candidate.encoded())
+        archive = candidate
+    }
+}
+
+/// Export a recoverable JSON object without leaking device-only work tickets.
+public enum ArchiveRecoveryExport {
+    public enum Failure: LocalizedError {
+        case unsafePayload
+        public var errorDescription: String? { "The original record can’t be safely exported. It remains on this device." }
+    }
+    public static func sanitized(_ data: Data) throws -> Data {
+        guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { throw Failure.unsafePayload }
+        root.removeValue(forKey: "iosFinalAssessments")
+        return try JSONSerialization.data(withJSONObject: root)
+    }
+}

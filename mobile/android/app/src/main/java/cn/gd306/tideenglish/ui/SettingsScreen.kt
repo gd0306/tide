@@ -78,6 +78,7 @@ fun SettingsScreen(vm: TideEnglishViewModel, onExport: () -> Unit, onImport: () 
                    onAccount: (() -> Unit)? = null, accountSummary: String? = null,
                    focusAdvanced: Boolean = false, onDismiss: () -> Unit = {}) {
     TideDialogAppearance()
+    val deletionScope = rememberCoroutineScope()
     var page by rememberSaveable { mutableStateOf("main") }
     var keyDialog by rememberSaveable { mutableStateOf(false) }
     var deleteAll by rememberSaveable { mutableStateOf(false) }
@@ -268,14 +269,14 @@ fun SettingsScreen(vm: TideEnglishViewModel, onExport: () -> Unit, onImport: () 
                 enabled = !vm.isRunning, modifier = Modifier.testTag("review-ai-consent")) { Text(stringResource(R.string.settings_review_consent_button)) }
         }, dismissButton = { TideEnglishTextButton(onClick = { permissionDetails = false }) { Text(stringResource(R.string.common_close)) } })
     if (deleteAll) ConfirmDialog(stringResource(R.string.settings_delete_all_confirm_title), stringResource(R.string.settings_delete_all_confirm_message), stringResource(R.string.settings_delete_all_confirm_button), {
-        vm.deleteLearningData(); deleteAll = false
+        deletionScope.launch { vm.deleteLearningData() }; deleteAll = false
     }, { deleteAll = false })
     if (revokeConsent) ConfirmDialog(stringResource(R.string.settings_revoke_consent_confirm_title),
         stringResource(R.string.settings_revoke_consent_confirm_message), stringResource(R.string.settings_revoke_consent_button), {
             vm.updatePreferences(vm.archive.preferences.copy(aiConsentVersion = null)); revokeConsent = false
         }, { revokeConsent = false })
     deleteSession?.let { session -> ConfirmDialog(stringResource(R.string.history_delete_session_confirm_title), session.title, stringResource(R.string.common_delete), {
-        vm.deleteSession(session.id); deleteSession = null
+        deletionScope.launch { vm.deleteSession(session.id) }; deleteSession = null
     }, { deleteSession = null }) }
     transcript?.let { TranscriptDialog(vm, it, onDismiss = { transcript = null }) }
 }

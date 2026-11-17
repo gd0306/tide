@@ -1,8 +1,12 @@
 import SwiftUI
+import TideEnglishCore
 
 @main struct TideEnglishApp: App {
     @State private var store: LearningStore?
     @State private var startupError: String?
+    @State private var startupBackup: BackupDocument?
+    @State private var exportingStartup = false
+    @State private var importingStartup = false
     #if DEBUG
     @State private var echoStatus = "Checking echo cancellation"
     #endif
@@ -28,11 +32,34 @@ import SwiftUI
             #endif
         }
     }
+    private func retryStartup() {
+        do { store = try LearningStore(); startupError = nil }
+        catch { startupError = "Tide couldn’t open its learning record. Your existing data has not been replaced." }
+    }
     @ViewBuilder private var content: some View {
             if let store { RootView(store: store).modifier(InterfaceAppearance()) }
             else {
-                ContentUnavailableView(UI("Let’s try again"), systemImage: "externaldrive.badge.exclamationmark", description: Text(UI(startupError ?? "The learning record is unavailable.")))
-                    .modifier(InterfaceAppearance())
+                VStack(spacing: 16) {
+                    ContentUnavailableView(UI("Let’s try again"), systemImage: "externaldrive.badge.exclamationmark", description: Text(UI(startupError ?? "The learning record is unavailable.")))
+                    Button(UI("Try again")) { retryStartup() }
+                    Button(UI("Export original learning record")) {
+                        do { startupBackup = BackupDocument(data: try StartupArchiveRecovery.readRaw()); exportingStartup = true }
+                        catch { startupError = error.localizedDescription }
+                    }
+                    Button(UI("Restore from backup")) { importingStartup = true }
+                }
+                .fileExporter(isPresented: $exportingStartup, document: startupBackup, contentType: .json, defaultFilename: "Tide-original-record") { result in
+                    if case .failure(let error) = result { startupError = error.localizedDescription }
+                }
+                .fileImporter(isPresented: $importingStartup, allowedContentTypes: [.json]) { result in
+                    do {
+                        let url = try result.get(); let granted = url.startAccessingSecurityScopedResource()
+                        defer { if granted { url.stopAccessingSecurityScopedResource() } }
+                        try StartupArchiveRecovery.restore(Archive.readImportData(from: url))
+                        retryStartup()
+                    } catch { startupError = error.localizedDescription }
+                }
+                .modifier(InterfaceAppearance())
             }
     }
 }

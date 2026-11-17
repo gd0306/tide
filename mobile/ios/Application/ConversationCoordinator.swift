@@ -22,6 +22,8 @@ import TideEnglishCore
     @ObservationIgnored private var vocabularyKeys: Set<String>?
     private let meanings: MeaningController
     private let finalAssessments: FinalAssessmentQueue
+    private var recoveredAssessmentIDs: Set<UUID> = []
+    private var recoveryForeground = false
     var meaning: String { meanings.text }
     var translating: Bool { meanings.isLoading }
     var meaningError: String? { meanings.error }
@@ -183,7 +185,16 @@ import TideEnglishCore
         }
         finalAssessments.onResult = { [weak self] result in
             guard let self, let updated = result.applying(to: self.store.sessions.first(where: { $0.id == result.sessionID })) else { return }
-            self.store.save(updated)
+            if self.conversationProvider == .hosted {
+                guard self.hasAIConsent else { return }
+                self.store.save(updated)
+                if self.session?.id == updated.id { self.session = updated }
+                return
+            }
+            guard self.hasAIConsent, let identity = try? ProviderConsent.identity(for: self.modelConfiguration),
+                  self.store.finalAssessmentTickets.contains(where: { $0.sessionID == updated.id && $0.provider == identity }) else { return }
+            do { try self.store.finishFinalAssessment(updated) }
+            catch { self.error = "Tide couldn’t save your progress. Please try again."; return }
             if self.session?.id == updated.id { self.session = updated }
         }
         vocabulary.onCacheChange = { [weak self] cache in
@@ -314,6 +325,7 @@ import TideEnglishCore
     func selectConversationProvider(_ provider: ConversationProvider) {
         guard !isRunning, provider != .hosted || ManagedAccountConfiguration.load() != nil || isPreview else { return }
         clearContinuation()
+        if conversationProvider != provider { finalAssessments.cancelAll() }
         conversationProvider = provider
         if !isPreview { UserDefaults.standard.set(provider.rawValue, forKey: "tideenglish.conversation-provider") }
         api.conversationProvider = provider
@@ -326,12 +338,12 @@ import TideEnglishCore
         let value = try configuration.validated()
         if !isPreview { try ModelSettings.save(value) }
         if value != modelConfiguration {
-            api.cancelAIRequests(); finalAssessments.cancelAll(); assessmentTask?.cancel()
+            api.cancelAIRequests(); finalAssessments.cancelAll(); store.discardFinalAssessments(); assessmentTask?.cancel()
             fallbackTask?.cancel(); fallbackPromptTask?.cancel(); meanings.reset()
             resetConversation()
             modelConfiguration = value; api.configuration = value
-            acceptedProviderIdentity = nil
-            if !isPreview { UserDefaults.standard.removeObject(forKey: "tideenglish.ai-provider-consent.v1") }
+            acceptedProviderIdentity = "revoked"
+            if !isPreview { UserDefaults.standard.set("revoked", forKey: "tideenglish.ai-provider-consent.v1") }
             store.updatePreferences { $0.aiConsentVersion = nil }
         }
         selectConversationProvider(.personalKey)
@@ -419,13 +431,16 @@ import TideEnglishCore
     }
     func declineAIConsent() { startAfterConsent = false; showAIConsent = false }
     func withdrawAIConsent() {
+        // Revoke the provider binding independently of archive write success.
+        acceptedProviderIdentity = "revoked"
+        if !isPreview { UserDefaults.standard.set("revoked", forKey: "tideenglish.ai-provider-consent.v1") }
         // Stop sending audio immediately, rather than waiting for a final provider event.
         store.updatePreferences { $0.aiConsentVersion = nil }
         startAfterConsent = false; showAIConsent = false
         languageGeneration = UUID()
         api.cancelAIRequests()
         fallbackTask?.cancel(); fallbackPromptTask?.cancel()
-        meanings.reset(); finalAssessments.cancelAll()
+        meanings.reset(); finalAssessments.cancelAll(); store.discardFinalAssessments()
         assessmentTask?.cancel()
         delegationTasks.values.forEach { $0.cancel() }; delegationTasks.removeAll()
         if isRunning {
@@ -544,6 +559,7 @@ import TideEnglishCore
         }
     }
     func background() {
+        recoveryForeground = false
         guard isRunning else { return }
         // A live audio session owns its microphone until deliberately ended, interrupted,
         // or closed by the existing silence/duration policy. Locking is not inactivity.
@@ -575,11 +591,18 @@ import TideEnglishCore
         if reachedBoundary { session?.endReason = "Time limit" }
         transport.disconnect(); pendingCommands = [:]; working = false
         session?.endedAt = .now; session?.usageFinal = final
-        save(); state = .ended
-        if hasAIConsent {
-            if let session { finalAssessments.submit(session) }
-            scheduleTranslation()
+        state = .ended
+        if let session, hasAIConsent, conversationProvider == .personalKey,
+           let identity = try? ProviderConsent.identity(for: modelConfiguration) {
+            do {
+                try store.saveForFinalAssessment(session, provider: identity)
+                submitFinalAssessment(session, identity: identity)
+            } catch { self.error = "Tide couldn’t save your progress. Please export a backup and try again." }
+        } else {
+            save()
+            if hasAIConsent, conversationProvider == .hosted, let session { finalAssessments.submit(session) }
         }
+        if hasAIConsent { scheduleTranslation() }
         api.endVoiceCredential()
         if let boundary, let session {
             continuationSession = session; continuationOwner = boundary.accountID; continuationReady = false
@@ -758,7 +781,28 @@ import TideEnglishCore
             self.resetConversation()
         }
     }
+    private func submitFinalAssessment(_ session: SessionRecord, identity: String) {
+        guard hasAIConsent, conversationProvider == .personalKey,
+              CredentialStore.hasKey(configuration: modelConfiguration), !finalAssessments.isPending(session.id) else { return }
+        do {
+            if try store.beginFinalAssessment(session, provider: identity) { finalAssessments.submit(session) }
+        } catch { self.error = "Tide couldn’t save your progress. Please try again." }
+    }
+    func retryFinalAssessments() {
+        guard hasAIConsent, conversationProvider == .personalKey,
+              CredentialStore.hasKey(configuration: modelConfiguration),
+              let identity = try? ProviderConsent.identity(for: modelConfiguration) else { return }
+        let remaining = max(0, 5 - recoveredAssessmentIDs.count)
+        guard remaining > 0 else { return }
+        for record in FinalAssessmentRecovery.recover(store.archive.sessions, tickets: store.finalAssessmentTickets, provider: identity, consent: true)
+            .filter({ !recoveredAssessmentIDs.contains($0.id) }).prefix(remaining) {
+            recoveredAssessmentIDs.insert(record.id)
+            submitFinalAssessment(record, identity: identity)
+        }
+    }
     func resume() {
+        if !recoveryForeground { recoveredAssessmentIDs.removeAll(); recoveryForeground = true }
+        retryFinalAssessments()
         restoreContinuation()
         if state == .ended, let resetDeadline, Date() >= resetDeadline { resetConversation() }
         if hasContinuation { Task { await refreshContinuation() } }
