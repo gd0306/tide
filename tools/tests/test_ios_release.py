@@ -50,7 +50,7 @@ class IOSReleaseTests(unittest.TestCase):
         self.assertIn("appFilingNumber", result.stdout)
 
     def test_placeholder_and_credential_bearing_urls_rejected(self):
-        for url in ["https://tide-english.example/privacy/", "https://example.com/privacy", "https://privacy.test/", "http://synthetic-tide-publisher.org/privacy", "https://secret@synthetic-tide-publisher.org/privacy"]:
+        for url in ["https://tide-english.example/privacy/", "https://example.com/privacy", "https://privacy.test/", "http://synthetic-tide-publisher.org/privacy", "https://secret@synthetic-tide-publisher.org/privacy", "https://[::ffff:127.0.0.1]/privacy/", "https://device.local/privacy/"]:
             with self.subTest(url=url):
                 config = synthetic_configuration()
                 config["links"]["privacy"] = url

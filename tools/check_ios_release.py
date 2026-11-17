@@ -5,6 +5,7 @@ Passing verifies the configuration's structure, never government approvals,
 contracts, remote page contents or Apple signing. Debug builds do not run this gate.
 """
 import argparse
+import ipaddress
 import json
 from pathlib import Path
 import re
@@ -28,10 +29,16 @@ def public_https_url(value):
         _ = url.port
     except ValueError:
         return False
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return False
     reserved = ("example.com", "example.net", "example.org", "localhost")
     return (url.scheme == "https" and "." in host and not url.username and not url.password
             and not url.fragment and host not in reserved
-            and not host.endswith((".example", ".test", ".invalid", ".localhost"))
+            and not host.endswith((".example", ".test", ".invalid", ".localhost", ".local"))
             and not any(host.endswith("." + item) for item in reserved)
             and not re.fullmatch(r"[\d.]+", host))
 
