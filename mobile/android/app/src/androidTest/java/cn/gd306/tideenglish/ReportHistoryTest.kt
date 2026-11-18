@@ -11,6 +11,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 /** Uses the isolated UI-test app with reporting/network configuration blank. */
 @RunWith(AndroidJUnit4::class)
@@ -26,17 +29,21 @@ class ReportHistoryTest {
 
     @Before fun setup() {
         vm = compose.awaitHistoryLoaded()
-        compose.runOnIdle {
-            originalPreferences = vm.archive.preferences.copy()
+        compose.runOnIdle { originalPreferences = vm.archive.preferences.copy() }
+        runBlocking { withContext(Dispatchers.Main) {
             assertTrue(vm.importData(ArchiveCodec.encode(Archive(sessions = mutableListOf(session)))))
+        } }
+        compose.runOnIdle {
             vm.updatePreferences(originalPreferences!!.copy(hasOnboarded = true))
         }
     }
 
     @After fun restore() {
-        originalPreferences?.let { prefs -> compose.runOnIdle {
-            vm.dismissReport(); vm.deleteSession(session.id); vm.updatePreferences(prefs)
-        } }
+        originalPreferences?.let { prefs ->
+            compose.runOnIdle { vm.dismissReport() }
+            runBlocking { withContext(Dispatchers.Main) { vm.deleteSession(session.id) } }
+            compose.runOnIdle { vm.updatePreferences(prefs) }
+        }
     }
 
     @Test fun savedAssistantReplyOpensExactPreviewAndUnavailableServiceCannotSubmit() {
