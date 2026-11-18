@@ -6,6 +6,7 @@ struct APIUsage { var input = 0; var output = 0; var searches = 0 }
 struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUsage }
 
 @MainActor final class APIClient {
+    let modelPolicy = PublicInformation.modelPolicy
     var configuration: ProviderConfiguration {
         didSet {
             if configuration != oldValue {
@@ -29,7 +30,7 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
     private var credentialExpiry: Task<Void, Never>?
     func beginVoiceCredential() {
         credentialExpiry?.cancel(); voiceCredential.clear()
-        guard let key = CredentialStore.read(configuration: configuration) else { return }
+        guard (try? modelPolicy.requireChat(configuration)) != nil, let key = CredentialStore.read(configuration: configuration) else { return }
         voiceCredential.begin(key: key)
         expireVoiceCredential(after: .seconds(65 * 60))
     }
@@ -44,7 +45,11 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
             self?.voiceCredential.clear(); self?.credentialExpiry = nil
         }
     }
-    func credential() throws -> String { try credential(configuration: configuration) }
+    func nativeCredential() throws -> String {
+        guard canProcessAI() else { throw AIProcessingConsent.ConsentError.required }
+        guard modelPolicy.permitsNative(configuration) else { throw ReleaseModelPolicy.Unavailable() }
+        return try credential(configuration: configuration)
+    }
     private func credential(configuration captured: ProviderConfiguration) throws -> String {
         _ = try captured.validated()
         let stored = { CredentialStore.read(configuration: captured) }
@@ -73,14 +78,9 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
     private func request(_ path: String, body: [String: Any], configuration: ProviderConfiguration, stream: Bool = false) throws -> URLRequest {
         guard canProcessAI() else { throw AIProcessingConsent.ConsentError.required }
         try Task.checkCancellation()
-        let key = try credential(configuration: configuration)
-        var request = URLRequest(url: try configuration.endpoint(path))
-        request.httpMethod = "POST"
-        request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if stream { request.setValue("text/event-stream", forHTTPHeaderField: "Accept") }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        return request
+        return try modelPolicy.request(path, body: body, configuration: configuration, stream: stream) {
+            try credential(configuration: configuration)
+        }
     }
     private func failure(_ http: HTTPURLResponse, body: Data, configuration: ProviderConfiguration) -> Error {
         #if DEBUG

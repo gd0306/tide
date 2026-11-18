@@ -200,17 +200,18 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val repository = LearningRepository(application)
+    val modelPolicy = ReleaseModelPolicy.fromSource(readPublicInformation(application), BuildConfig.DEBUG)
     private val modelStore = ProviderConfigurationStore(application)
     var modelConfiguration by mutableStateOf(modelStore.read()); private set
     val supportsCurrentTopic get() = modelConfiguration.provider in listOf(ModelProvider.OPENAI, ModelProvider.GLM)
     private val providerConsent = application.getSharedPreferences("tide_provider_consent", android.content.Context.MODE_PRIVATE)
     private val credentials get() = CredentialStore(getApplication(), modelConfiguration)
-    private val openAI = APIClient(CredentialStore(application))
-    private val api = ProviderTeachingClient({ modelConfiguration }, { configuration -> CredentialStore(application, configuration).read() })
+    private val openAI = APIClient(CredentialStore(application), modelPolicy) { modelConfiguration }
+    private val api = ProviderTeachingClient({ modelConfiguration }, { configuration -> CredentialStore(application, configuration).read() }, policy = modelPolicy)
     private val transport = LiveTransport(application, viewModelScope)
     private val localVoice = LocalVoiceTransport(application, viewModelScope, api)
     private val nativeVoice = NativeProviderVoiceTransport(application, viewModelScope, { modelConfiguration },
-        { configuration -> CredentialStore(application, configuration).read() })
+        { configuration -> CredentialStore(application, configuration).read() }, policy = modelPolicy)
     private var alternativeVoice: String? = null
     private var nativeFallback = false
     private val providerStore = ConversationProviderStore(application)
@@ -728,7 +729,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     fun updateModelConfiguration(configuration: ProviderConfiguration): Boolean {
         if (isRunning || !storageReady) return false
         return try {
-            val valid = configuration.validated()
+            val valid = modelPolicy.requireChat(configuration)
             if (valid == modelConfiguration) return true
             // Revoke durably before changing recipient, including across process death.
             check(providerConsent.edit().remove("accepted").putBoolean("migrated", true).commit())

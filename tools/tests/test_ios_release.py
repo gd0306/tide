@@ -20,7 +20,8 @@ def synthetic_configuration():
         "publisher": {"legalName": "Synthetic Review Publisher", "supportEmail": "review@synthetic-tide-publisher.org"},
         "links": {key: "https://synthetic-tide-publisher.org/" + key for key in ("privacy", "support", "terms")},
         "appFilingNumber": "京ICP备2099000000号-1A",
-        "aiServices": [{"provider": "Synthetic AI", "model": "synthetic-model", "filingNumber": "synthetic-filing-for-test-only", "authorizationReference": "https://synthetic-tide-publisher.org/agreement"}],
+        "modelPolicy": "declaredOnly",
+        "aiServices": [{"provider": "openAI", "baseURL": "https://api.openai.com/v1", "model": "synthetic-model", "filingNumber": "synthetic-filing-for-test-only", "authorizationReference": "https://synthetic-tide-publisher.org/agreement"}],
         "reviewed": {"privacy": True, "publicPages": True, "aiContentLabels": True, "providerAuthorization": True},
         "features": {"accounts": False, "hosted": False, "purchases": False},
     }
@@ -32,6 +33,21 @@ class IOSReleaseTests(unittest.TestCase):
             path = Path(directory) / "release.json"
             path.write_text(json.dumps(config, ensure_ascii=False))
             return subprocess.run([sys.executable, str(SCRIPT), "--config", str(path)], cwd=ROOT, capture_output=True, text=True)
+
+    def test_shared_native_declarations_and_public_urls(self):
+        from tools.check_ios_release import public_https_url, validate
+        fixture = json.loads((ROOT / "packages/fixtures/cross-platform/release-model-policy.json").read_text())
+        config = synthetic_configuration()
+        agreement = config["aiServices"][0]["authorizationReference"]
+        config["aiServices"] = [dict(entry, authorizationReference=agreement) for entry in fixture["metadata"]["aiServices"]]
+        self.assertEqual(validate(config), [])
+        for entry in fixture["invalidDeclarations"]:
+            with self.subTest(entry=entry):
+                self.assertTrue(validate(dict(config, aiServices=[dict(entry, authorizationReference=agreement)])))
+        for value in fixture["validURLs"]:
+            self.assertTrue(public_https_url(value), value)
+        for value in fixture["invalidURLs"]:
+            self.assertFalse(public_https_url(value), value)
 
     def test_structurally_complete_configuration_reports_unverified_real_world_checks(self):
         result = self.run_check(synthetic_configuration())
@@ -50,7 +66,7 @@ class IOSReleaseTests(unittest.TestCase):
         self.assertIn("appFilingNumber", result.stdout)
 
     def test_placeholder_and_credential_bearing_urls_rejected(self):
-        for url in ["https://tide-english.example/privacy/", "https://example.com/privacy", "https://privacy.test/", "http://synthetic-tide-publisher.org/privacy", "https://secret@synthetic-tide-publisher.org/privacy", "https://[::ffff:127.0.0.1]/privacy/", "https://device.local/privacy/"]:
+        for url in ["https://bad..site/privacy", "https://bad\\host.cn/privacy", "https://@gd306.cn/tide/privacy/", "https://bad-.site/", "https://bad.site/%zz", "https://bad.site/\x01route", "https://tide-english.example/privacy/", "https://example.com/privacy", "https://privacy.test/", "http://synthetic-tide-publisher.org/privacy", "https://secret@synthetic-tide-publisher.org/privacy", "https://[::ffff:127.0.0.1]/privacy/", "https://device.local/privacy/"]:
             with self.subTest(url=url):
                 config = synthetic_configuration()
                 config["links"]["privacy"] = url
@@ -59,6 +75,12 @@ class IOSReleaseTests(unittest.TestCase):
     def test_unreviewed_ai_services_and_enabled_commerce_rejected(self):
         for mutate in [
             lambda c: c.update(aiServices=[]),
+            lambda c: c.pop("modelPolicy"),
+            lambda c: c.update(modelPolicy="unrestricted"),
+            lambda c: c["aiServices"][0].update(provider="alien"),
+            lambda c: c["aiServices"][0].update(model="*"),
+            lambda c: c["aiServices"][0].update(baseURL="https://wrong.org"),
+            lambda c: c["aiServices"][0].update(provider="custom", baseURL=""),
             lambda c: c["aiServices"][0].update(authorizationReference=""),
             lambda c: c["reviewed"].update(aiContentLabels=False),
             lambda c: c["features"].update(accounts=True),

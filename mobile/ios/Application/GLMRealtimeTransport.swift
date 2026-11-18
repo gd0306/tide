@@ -45,8 +45,9 @@ import TideEnglishCore
         disconnect()
         let token = UUID(); attempt = token
         do {
-            let configuration = try api.configuration.validated()
+            let configuration = try api.modelPolicy.requireChat(api.configuration)
             guard configuration.provider == .glm, api.canProcessAI() else { throw TransportError.service(.invalidRequest) }
+            guard api.modelPolicy.permitsNative(configuration) else { throw CapabilityError.denied }
             canProcess = { [weak api] in api?.canProcessAI() == true && api?.configuration == configuration }
             state = GLMRealtimeProtocol(instructions: instructions)
             let update = try GLMRealtimeProtocol.configuration(instructions: instructions)
@@ -58,7 +59,7 @@ import TideEnglishCore
             guard granted else { throw TransportError.microphone }
             guard canProcess() else { throw TransportError.service(.invalidRequest) }
             // No selected chat model is sent here: the native realtime endpoint has its own model.
-            let jwt = try GLMRealtimeProtocol.token(key: api.credential(), now: Date().timeIntervalSince1970)
+            let jwt = try GLMRealtimeProtocol.token(key: api.nativeCredential(), now: Date().timeIntervalSince1970)
             var request = URLRequest(url: GLMRealtimeProtocol.socketURL)
             request.setValue("Bearer " + jwt, forHTTPHeaderField: "Authorization")
             let network = URLSessionConfiguration.ephemeral

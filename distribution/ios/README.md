@@ -10,7 +10,7 @@
 
 ## 编辑配置
 
-`release-config.json` 是可提交的空主体开发配置。可复制到 Git 忽略的 `distribution/private/ios-release.json` 后填写正式资料，避免误提交私人材料。模型授权协议正文和签名材料不要存入配置或源码，只记录可公开的引用地址。
+`release-config.json` 是可提交的空主体开发配置。可复制到 Git 忽略的 `distribution/private/ios-release.json` 后填写正式资料，避免误提交私人材料。模型授权协议正文和签名材料不要存入配置或源码，在私有配置的 `authorizationReference` 中记录合约引用地址。
 
 需由运营者核实并填写：法定姓名、公开支持邮箱、APP 备案号、实际启用的模型名称/备案信息和使用授权，以及隐私/标识/授权复核结果。`reviewed.publicPages` 只在页面实际发布并核对内容后设为 true，不能因为本地生成了页面就设为 true。
 
@@ -31,7 +31,21 @@ python3 tools/check_ios_release.py --config distribution/private/ios-release.jso
 
 页面输出到 `.build/tide-public-pages/`，包含 `privacy/index.html`、`support/index.html` 和 `terms/index.html`，对应域名的 `/tide/` 目录。`--draft` 会增加禁止索引和未完成提示，草稿不能作为最终发布材料。
 
-`PublicInformation.json` / Android `raw/public_information.json` 仅包含公开主体、支持地址、页面地址、备案号和服务名称。默认 `publicPagesReady=false`，客户端提供本地说明而不打开尚未确认发布的外部页面。若采用私有配置生成资源，公开的元数据会进入安装包；提交前应再次确认这是你希望公开的内容。
+`PublicInformation.json` / Android `raw/public_information.json` 仅包含公开主体、支持地址、页面地址、备案号、模型策略和模型/收件地址声明。默认 `publicPagesReady=false`，客户端提供本地说明而不打开尚未确认发布的外部页面。若采用私有配置生成资源，公开的元数据会进入安装包；提交前应再次确认这是你希望公开的内容。
+
+### 模型声明与请求地址
+
+开发配置的 `modelPolicy: "unrestricted"` 保留自由 BYOK。正式配置必须设为 `declaredOnly`，在 `aiServices` 中逐项填写 `provider`、实际 `model`、规范化 `baseURL`、可公开的 `filingNumber` 和私有 `authorizationReference`。同一服务商的每个模型单独声明。未声明的组合会在读取请求凭据和发送请求前被拒绝。旧设置可在模型设置中重新选择，密钥仍使用原服务商或自定义端点的存储范围。
+
+| provider | 文本模型的 baseURL | 原生实时语音的声明 |
+| --- | --- | --- |
+| `openAI` | `https://api.openai.com/v1` | 独立填写 `gpt-live-1`，共用此 baseURL，客户端核对 `live/sessions` 的 `session.model`。 |
+| `deepSeek` | `https://api.deepseek.com` | 使用设备语音和获准的文本模型。 |
+| `glm` | `https://open.bigmodel.cn/api/paas/v4` | 原生接口由服务端选模型，正式模式使用设备语音和获准的文本模型。 |
+| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | 独立填写 `models/gemini-3.8-live`，baseURL 为 `https://generativelanguage.googleapis.com`。客户端仅使用该主机的固定 token 和 WebSocket 路径。 |
+| `custom` | 精确填写实际公开 HTTPS API 基址，含适用的端口和路径 | 使用设备语音和该端点获准的文本模型。 |
+
+原生语音专用条目不会列入聊天模型选择。请用同一份私有配置运行发行检查和 `python3 tools/generate_public_information.py --check --config distribution/private/ios-release.json`，核对两个客户端实际打包的公开清单。离线样例和检查均不能证明备案、使用授权或网站可用性。
 
 ## 仍需人工或外部核对的事项
 

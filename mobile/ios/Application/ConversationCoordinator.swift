@@ -335,7 +335,7 @@ import TideEnglishCore
     }
     func configureModel(_ configuration: ProviderConfiguration) throws {
         guard !isRunning else { throw ConfigurationError.activeConversation }
-        let value = try configuration.validated()
+        let value = try api.modelPolicy.requireChat(configuration)
         if !isPreview { try ModelSettings.save(value) }
         if value != modelConfiguration {
             api.cancelAIRequests(); finalAssessments.cancelAll(); store.discardFinalAssessments(); assessmentTask?.cancel()

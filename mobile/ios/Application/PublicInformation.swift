@@ -13,23 +13,21 @@ enum PublicInformationPage: String {
     }
 }
 
-private struct PublicInformation: Decodable {
-    let schemaVersion: Int
-    let publisherName: String
-    let supportEmail: String
-    let publicPagesReady: Bool
-    let links: [String: String]
-    let appFilingNumber: String
-
-    static let bundled: Self? = Bundle.main.url(forResource: "PublicInformation", withExtension: "json")
+enum PublicInformation {
+    private static let source = Bundle.main.url(forResource: "PublicInformation", withExtension: "json")
         .flatMap { try? Data(contentsOf: $0) }
-        .flatMap { try? JSONDecoder().decode(Self.self, from: $0) }
+    static let bundled = source.flatMap { try? JSONDecoder().decode(PublicMetadata.self, from: $0) }
+    #if DEBUG
+    static let modelPolicy = ReleaseModelPolicy(source: source, debug: true)
+    #else
+    static let modelPolicy = ReleaseModelPolicy(source: source, debug: false)
+    #endif
+}
 
+private extension PublicMetadata {
     func url(for page: PublicInformationPage) -> URL? {
-        guard schemaVersion == 1, publicPagesReady, let value = links[page.rawValue],
-              let url = URL(string: value), url.scheme == "https", url.user == nil, url.password == nil,
-              let host = url.host, !host.isEmpty, !host.hasSuffix(".example") else { return nil }
-        return url
+        guard schemaVersion == 1, publicPagesReady, let value = links[page.rawValue] else { return nil }
+        return publicHTTPSURL(value)
     }
 }
 

@@ -23,13 +23,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import cn.gd306.tideenglish.R
-import java.net.URI
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import cn.gd306.tideenglish.core.readPublicInformation
+import cn.gd306.tideenglish.core.PublicMetadata
+import cn.gd306.tideenglish.core.isPublicHttpsURL
 
 internal enum class PublicInformationPage(val key: String) {
     PRIVACY("privacy"), SUPPORT("support"), TERMS("terms");
@@ -60,26 +56,16 @@ internal fun PublicInformationLink(page: PublicInformationPage, modifier: Modifi
 }
 
 @Composable
-private fun PublicInformationDialog(page: PublicInformationPage, onDismiss: () -> Unit) {
+private fun bundledPublicMetadata(): PublicMetadata? {
     val context = LocalContext.current
+    return remember(context) { PublicMetadata.decode(readPublicInformation(context)) }
+}
+
+@Composable
+internal fun PublicInformationDialog(page: PublicInformationPage, info: PublicMetadata? = bundledPublicMetadata(), onDismiss: () -> Unit) {
     val uri = LocalUriHandler.current
     var openingFailed by rememberSaveable(page) { mutableStateOf(false) }
-    val info = remember(context) {
-        runCatching {
-            context.resources.openRawResource(R.raw.public_information).bufferedReader().use {
-                Json.parseToJsonElement(it.readText()).jsonObject
-            }
-        }.getOrNull()?.takeIf { it["schemaVersion"]?.jsonPrimitive?.intOrNull == 1 }
-    }
-    val website = remember(info, page) {
-        runCatching {
-            if (info?.get("publicPagesReady")?.jsonPrimitive?.booleanOrNull != true) return@runCatching null
-            val value = info["links"]?.jsonObject?.get(page.key)?.jsonPrimitive?.content ?: return@runCatching null
-            val address = URI(value)
-            value.takeIf { address.scheme == "https" && address.userInfo == null &&
-                !address.host.isNullOrBlank() && !address.host.endsWith(".example") }
-        }.getOrNull()
-    }
+    val website = info?.takeIf { it.publicPagesReady }?.links?.get(page.key)?.takeIf(::isPublicHttpsURL)
     val sections = when (page) {
         PublicInformationPage.PRIVACY -> listOf(
             uiText("On this device", "保存在设备上") to uiText("Conversations, vocabulary, translations and saved practice stay in the app’s local storage. API keys are kept separately in system secure storage and excluded from learning backups. System backups depend on device settings.", "对话、词汇、译文和保存的练习保存在应用本机存储中。API Key 独立保存在系统安全存储中，不包含在学习备份里。系统备份还受设备设置影响。"),
@@ -110,8 +96,8 @@ private fun PublicInformationDialog(page: PublicInformationPage, onDismiss: () -
                         Text(sectionHeading, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
                         Text(content, style = MaterialTheme.typography.bodyLarge)
                     }
-                    listOf("publisherName", "supportEmail", "appFilingNumber").forEach { key ->
-                        info?.get(key)?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let { Text(it) }
+                    listOfNotNull(info?.publisherName, info?.supportEmail, info?.appFilingNumber).forEach { value ->
+                        if (value.isNotBlank()) Text(value)
                     }
                     if (page == PublicInformationPage.SUPPORT || website != null) {
                         TideEnglishTextButton(onClick = {

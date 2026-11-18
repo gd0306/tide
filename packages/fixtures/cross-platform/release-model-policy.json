@@ -1,0 +1,136 @@
+{
+  "metadata": {
+    "schemaVersion": 1,
+    "publisherName": "",
+    "supportEmail": "",
+    "appFilingNumber": "",
+    "publicPagesReady": false,
+    "links": {
+      "privacy": "",
+      "support": "",
+      "terms": ""
+    },
+    "modelPolicy": "declaredOnly",
+    "aiServices": [
+      {
+        "provider": "openAI",
+        "model": "synthetic-chat",
+        "baseURL": "https://api.openai.com/v1",
+        "filingNumber": "synthetic-filing-for-test-only"
+      },
+      {
+        "provider": "openAI",
+        "model": "gpt-live-1",
+        "baseURL": "https://api.openai.com/v1",
+        "filingNumber": "synthetic-filing-for-test-only"
+      },
+      {
+        "provider": "gemini",
+        "model": "synthetic-chat",
+        "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "filingNumber": "synthetic-filing-for-test-only"
+      },
+      {
+        "provider": "gemini",
+        "model": "models/gemini-3.8-live",
+        "baseURL": "https://generativelanguage.googleapis.com",
+        "filingNumber": "synthetic-filing-for-test-only"
+      },
+      {
+        "provider": "glm",
+        "model": "synthetic-chat",
+        "baseURL": "https://open.bigmodel.cn/api/paas/v4",
+        "filingNumber": "synthetic-filing-for-test-only"
+      },
+      {
+        "provider": "custom",
+        "model": "synthetic-chat",
+        "baseURL": "https://synthetic-model.org/v1",
+        "filingNumber": "synthetic-filing-for-test-only"
+      }
+    ]
+  },
+  "invalidDeclarations": [
+    {
+      "provider": "gemini",
+      "model": "models/gemini-3.8-live",
+      "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "filingNumber": "synthetic-filing-for-test-only"
+    },
+    {
+      "provider": "openAI",
+      "model": "gpt-live-1",
+      "baseURL": "https://generativelanguage.googleapis.com",
+      "filingNumber": "synthetic-filing-for-test-only"
+    },
+    {
+      "provider": "custom",
+      "model": "bad model",
+      "baseURL": "https://synthetic-model.org/v1",
+      "filingNumber": "synthetic-filing-for-test-only"
+    },
+    {
+      "provider": "custom",
+      "model": "synthetic-chat",
+      "baseURL": "https://127.0.0.1/v1",
+      "filingNumber": "synthetic-filing-for-test-only"
+    },
+    {
+      "provider": "gemini",
+      "model": "synthetic-chat",
+      "baseURL": "https://generativelanguage.googleapis.com",
+      "filingNumber": "synthetic-filing-for-test-only"
+    },
+    {
+      "provider": "unknown",
+      "model": "synthetic-chat",
+      "baseURL": "https://api.openai.com/v1",
+      "filingNumber": "synthetic-filing-for-test-only"
+    },
+    {
+      "model": "synthetic-chat",
+      "baseURL": "https://api.openai.com/v1",
+      "filingNumber": "synthetic-filing-for-test-only"
+    },
+    {
+      "provider": "openAI",
+      "baseURL": "https://api.openai.com/v1",
+      "filingNumber": "synthetic-filing-for-test-only"
+    },
+    {
+      "provider": "openAI",
+      "model": "synthetic-chat",
+      "filingNumber": "synthetic-filing-for-test-only"
+    },
+    {
+      "provider": "openAI",
+      "model": "synthetic-chat",
+      "baseURL": "https://api.openai.com/v1",
+      "filingNumber": "synthetic\nfiling"
+    }
+  ],
+  "validURLs": [
+    "https://gd306.cn/tide/privacy/",
+    "https://news.synthetic-model.org:8443/a%20b?q=1"
+  ],
+  "invalidURLs": [
+    "https://bad..site/privacy",
+    "https://bad\\host.cn/privacy",
+    "https://@gd306.cn/tide/privacy/",
+    "https://bad-.site/",
+    "https://bad.site/%zz",
+    "https://bad.site/\u0001route",
+    "https://gd306.cn./path",
+    "https://gd306.cn:0/a",
+    "https://127.0.0.1/a",
+    "https://[::1]/",
+    "https://0x7f.0x1/a",
+    "https://foo.example.com/",
+    "https://site.local/",
+    "https://gd306.cn?#",
+    "https://bad.site/%5cpath",
+    "https://bad.site/%0Apath",
+    "https://privacy.alt/page",
+    "https://router.localdomain/"
+  ]
+}

@@ -1,5 +1,6 @@
 package cn.gd306.tideenglish.network
 
+import cn.gd306.tideenglish.core.ReleaseModelPolicy
 import cn.gd306.tideenglish.core.QuickTranslationRequest
 import cn.gd306.tideenglish.core.ModelProvider
 import cn.gd306.tideenglish.core.ProviderFailureKind
@@ -21,6 +22,7 @@ class ProviderTeachingClient(
  private val configuration: () -> ProviderConfiguration,
  private val credential: (ProviderConfiguration) -> String?,
  client: OkHttpClient = OkHttpClient.Builder().connectTimeout(45,TimeUnit.SECONDS).readTimeout(60,TimeUnit.SECONDS).callTimeout(60,TimeUnit.SECONDS).build(),
+ private val policy: ReleaseModelPolicy,
 ):TeachingClient {
  private val client=client.newBuilder().followRedirects(false).followSslRedirects(false).cookieJar(CookieJar.NO_COOKIES).cache(null).build()
  override suspend fun respond(instructions:String,input:String,schema:JsonObject?,search:Boolean,purpose:HelperPurpose?):APIResult =
@@ -30,11 +32,10 @@ class ProviderTeachingClient(
   return response(request.instructions,request.text,null,false,4096)
  }
  private suspend fun response(instructions:String,input:String,schema:JsonObject?,search:Boolean,outputTokenLimit:Int?):APIResult {
-  val config=configuration().validated()
+  val config=policy.requireChat(configuration())
   if(search && config.provider !in listOf(ModelProvider.OPENAI,ModelProvider.GLM)) throw ProviderException("This provider does not support current-topic search. Select OpenAI or GLM to search.")
-  val key=credential(config)?.let { ProviderConfiguration.validatedCredential(it) } ?: throw APIClient.APIException.MissingKey
   val body=payload(config,instructions,input,schema,search,outputTokenLimit)
-  val request=Request.Builder().url((config.baseURL+if(config.provider==ModelProvider.OPENAI) "/responses" else "/chat/completions").toHttpUrl()).header("Authorization","Bearer $key").post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType())).build()
+  val request=teachingRequest(config,body)
   val value=execute(request)
   if(configuration().validated()!=config) throw kotlinx.coroutines.CancellationException("Provider selection changed.")
   if(config.provider==ModelProvider.OPENAI) return decodeTeachingResponse(value)
@@ -59,6 +60,20 @@ class ProviderTeachingClient(
   }.distinctBy { it.url }
   return APIResult(text,sources,APIUsage((usage?.get("prompt_tokens") as? JsonPrimitive)?.intOrNull?.coerceIn(0,1_000_000_000) ?: 0,(usage?.get("completion_tokens") as? JsonPrimitive)?.intOrNull?.coerceIn(0,1_000_000_000) ?: 0,if(sources.isEmpty()) 0 else 1))
  }
+ private fun teachingRequest(config: ProviderConfiguration, body: JsonObject, stream: Boolean = false): Request {
+  val base = config.baseURL.toHttpUrl()
+  val actualModel = (body["model"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+  require(!policy.restricted || (actualModel == config.model &&
+          policy.permitsWire(config.provider, actualModel, base.toString().trimEnd('/')))) {
+   "This model or endpoint is unavailable in this release."
+  }
+  val path = if (config.provider == ModelProvider.OPENAI) "responses" else "chat/completions"
+  val url = base.newBuilder().addPathSegments(path).build()
+  val key = credential(config)?.let { ProviderConfiguration.validatedCredential(it) } ?: throw APIClient.APIException.MissingKey
+  return Request.Builder().url(url).header("Authorization", "Bearer $key").apply {
+   if (stream) header("Accept", "text/event-stream")
+  }.post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType())).build()
+ }
  private fun payload(config:ProviderConfiguration,instructions:String,input:String,schema:JsonObject?,search:Boolean,outputTokenLimit:Int?=null):JsonObject {
   return if(config.provider==ModelProvider.OPENAI) buildJsonObject {
    put("model",config.model);put("store",false);put("instructions",instructions)
@@ -80,14 +95,13 @@ class ProviderTeachingClient(
   }
  }
  override suspend fun streamMeaning(instructions:String,input:String,onText:(String)->Unit):APIResult {
-  val config=configuration().validated()
-  val key=credential(config)?.let { ProviderConfiguration.validatedCredential(it) } ?: throw APIClient.APIException.MissingKey
+  val config=policy.requireChat(configuration())
   val body=buildJsonObject {
    payload(config,instructions,input,null,false).forEach { (name,value) -> put(name,value) }
    put("stream",true)
    if(config.provider!=ModelProvider.OPENAI) put("stream_options",buildJsonObject { put("include_usage",true) })
   }
-  val request=Request.Builder().url((config.baseURL+if(config.provider==ModelProvider.OPENAI) "/responses" else "/chat/completions").toHttpUrl()).header("Authorization","Bearer $key").header("Accept","text/event-stream").post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType())).build()
+  val request=teachingRequest(config,body,stream=true)
   val callbacks=currentCoroutineContext().minusKey(Job)
   fun current() { if(configuration().validated()!=config) throw CancellationException("Provider selection changed.") }
   try {

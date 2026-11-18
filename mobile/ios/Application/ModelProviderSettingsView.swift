@@ -18,36 +18,61 @@ struct ModelProviderSettingsView: View {
         _configuration = State(initialValue: coordinator.modelConfiguration)
     }
 
+    private let policy = PublicInformation.modelPolicy
+
     var body: some View {
         Form {
             Section {
-                Picker(UI("Provider"), selection: Binding(get: { configuration.provider }, set: selectProvider)) {
-                    ForEach(ModelProvider.allCases, id: \.self) { provider in
-                        Text(UI(provider.displayName)).tag(provider)
+                if policy.restricted {
+                    if policy.chatChoices.isEmpty {
+                        Text(UI("No models are available in this release."))
+                    } else if !policy.chatChoices.contains(coordinator.modelConfiguration) {
+                        Text(UI("Your saved model is unavailable in this release. Choose an available model to update it."))
                     }
-                }
-                .pickerStyle(.menu)
-                .disabled(coordinator.isRunning)
-                .accessibilityIdentifier("model-provider-picker")
-                TextField(UI("Chat model"), text: $configuration.model)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .disabled(coordinator.isRunning)
-                    .accessibilityIdentifier("model-chat-model")
-                if configuration.provider == .custom {
-                    TextField(UI("HTTPS API base URL"), text: Binding(
-                        get: { configuration.baseURL },
-                        set: { value in
-                            guard value != configuration.baseURL else { return }
-                            configuration.baseURL = value
-                            key = ""
-                            message = nil
-                            refreshSavedStatus()
+                    Menu {
+                        ForEach(Array(policy.chatChoices.enumerated()), id: \.offset) { _, choice in
+                            Button(choiceLabel(choice)) {
+                                configuration = choice
+                                key = ""
+                                message = nil
+                                refreshSavedStatus()
+                            }
                         }
-                    ))
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .textContentType(.URL).keyboardType(.URL)
+                    } label: {
+                        LabeledContent(UI("Chat model"), value: policy.chatChoices.contains(configuration) ?
+                            choiceLabel(configuration) : UI("Select model"))
+                    }
+                    .disabled(policy.chatChoices.isEmpty || coordinator.isRunning)
+                    .accessibilityIdentifier("model-provider-picker")
+                } else {
+                    Picker(UI("Provider"), selection: Binding(get: { configuration.provider }, set: selectProvider)) {
+                        ForEach(ModelProvider.allCases, id: \.self) { provider in
+                            Text(UI(provider.displayName)).tag(provider)
+                        }
+                    }
+                    .pickerStyle(.menu)
                     .disabled(coordinator.isRunning)
-                    .accessibilityIdentifier("model-base-url")
+                    .accessibilityIdentifier("model-provider-picker")
+                    TextField(UI("Chat model"), text: $configuration.model)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .disabled(coordinator.isRunning)
+                        .accessibilityIdentifier("model-chat-model")
+                    if configuration.provider == .custom {
+                        TextField(UI("HTTPS API base URL"), text: Binding(
+                            get: { configuration.baseURL },
+                            set: { value in
+                                guard value != configuration.baseURL else { return }
+                                configuration.baseURL = value
+                                key = ""
+                                message = nil
+                                refreshSavedStatus()
+                            }
+                        ))
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .textContentType(.URL).keyboardType(.URL)
+                        .disabled(coordinator.isRunning)
+                        .accessibilityIdentifier("model-base-url")
+                    }
                 }
             } header: { Text(UI("Chat model")) } footer: {
                 Text(UI("The selected chat model handles conversations, meanings and learning assessment. Custom endpoints must use HTTPS and support OpenAI-compatible chat completions."))
@@ -102,7 +127,7 @@ struct ModelProviderSettingsView: View {
 
             Section {
                 Button(UI("Save model settings")) { save() }
-                    .disabled(coordinator.isRunning)
+                    .disabled(coordinator.isRunning || (policy.restricted && !policy.chatChoices.contains(configuration)))
                     .accessibilityIdentifier("model-save")
                 if let console = consoleURL {
                     Link(UI(configuration.provider == .gemini ? "Google AI Studio" : "\(configuration.provider.displayName) console"), destination: console)
@@ -123,6 +148,10 @@ struct ModelProviderSettingsView: View {
         }
     }
 
+    private func choiceLabel(_ value: ProviderConfiguration) -> String {
+        "\(value.provider.displayName) · \(value.model)" + (value.provider == .custom ? " · " + value.baseURL : "")
+    }
+
     private var isPreview: Bool {
         #if DEBUG && targetEnvironment(simulator)
         ProcessInfo.processInfo.arguments.contains("--preview")
@@ -140,7 +169,10 @@ struct ModelProviderSettingsView: View {
     }
 
     private var voiceDescription: String {
-        switch configuration.provider {
+        if policy.restricted && !policy.permitsNative(configuration) {
+            return "Native realtime voice is unavailable for this model in this release."
+        }
+        return switch configuration.provider {
         case .openAI: "Native live voice uses gpt-live-1."
         case .glm: "GLM native realtime voice uses its own voice model. If realtime access is unavailable, voice uses on-device recognition and system reading."
         case .gemini: "Gemini native live voice uses gemini-3.8-live. If realtime access is unavailable, voice uses on-device recognition and system reading."
@@ -200,7 +232,7 @@ struct ModelProviderSettingsView: View {
         guard !coordinator.isRunning else { message = "End this conversation before changing model settings."; return }
         defer { key = "" }
         do {
-            let value = try configuration.validated()
+            let value = try policy.requireChat(configuration)
             let replacement = key.isEmpty ? nil : try ProviderConfiguration.validatedCredential(key)
             if let replacement {
                 if isPreview {

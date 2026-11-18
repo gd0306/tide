@@ -37,8 +37,9 @@ import TideEnglishCore
         let token = UUID(); attempt = token
         do {
             try await withTaskCancellationHandler {
-                let configuration = try api.configuration.validated()
+                let configuration = try api.modelPolicy.requireChat(api.configuration)
                 guard configuration.provider == .gemini, api.canProcessAI() else { throw TransportError.consent }
+                guard api.modelPolicy.permitsNative(configuration) else { throw CapabilityError.denied }
                 canProcess = { [weak api] in api?.canProcessAI() == true && api?.configuration == configuration }
                 self.instructions = instructions
                 let historyFrame = try GeminiLiveProtocol.history(history)
@@ -51,7 +52,7 @@ import TideEnglishCore
                 armTimeout(token: token)
                 var request = URLRequest(url: GeminiLiveProtocol.tokenURL)
                 request.httpMethod = "POST"
-                request.setValue(try GeminiLiveProtocol.checkedSecret(api.credential()), forHTTPHeaderField: "x-goog-api-key")
+                request.setValue(try GeminiLiveProtocol.checkedSecret(api.nativeCredential()), forHTTPHeaderField: "x-goog-api-key")
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.httpBody = try JSONSerialization.data(withJSONObject: GeminiLiveProtocol.tokenBody(now: Date()))
                 // Stream and bound the provisioning response before accumulating it.
