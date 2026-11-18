@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class PracticeCorrectionResult(val hasCorrection: Boolean, val corrected: String, val explanation: String) {
     fun correction(languageID: String, original: String, sourceSessionID: String, sourcePassageID: String, revisionKey: String, sessions: List<SessionRecord>): SavedCorrection? {
-        if (!hasCorrection || corrected == original) return null
+        if (!hasCorrection || corrected.canonical() == original.canonical()) return null
         val result = SavedCorrection(languageID = languageID, original = original, corrected = corrected, explanation = explanation, sourceSessionID = sourceSessionID, sourcePassageID = sourcePassageID, revisionKey = revisionKey)
         if (!result.matches(sessions)) return null
         return try { PracticeLibrary(corrections = mutableListOf(result)).validate(); result } catch (_: ArchiveError) { null }

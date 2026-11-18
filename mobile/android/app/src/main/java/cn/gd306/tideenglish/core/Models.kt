@@ -186,8 +186,12 @@ object ArchiveCodec {
             val s = source.copy(fragments=source.fragments.toMutableList(), assessments=source.assessments.toMutableList(), translations=source.translations.toMutableMap(), topics=source.topics.toMutableList())
             s.invalidateChangedAssessments(); s.assessments = s.assessments.mapNotNull { LearningEngine.validate(it,s) }.toMutableList(); out.sessions += s
         }
-        incoming.practice?.let { out.practice = (out.practice ?: PracticeLibrary()).merging(it) }
         out.practice?.invalidateCorrections(out.sessions)
+        incoming.practice?.let { source ->
+            val valid = PracticeLibrary(source.expressions.toMutableList(), source.corrections.toMutableList())
+            valid.invalidateCorrections(out.sessions)
+            out.practice = (out.practice ?: PracticeLibrary()).merging(valid)
+        }
         validate(out); if (encode(out).toByteArray().size > MAXIMUM_ENCODED_BYTES) throw ArchiveError.TOO_LARGE
         return out
     }
@@ -223,8 +227,19 @@ object ArchiveCodec {
         fields(preferences, "learningLanguageID meaningVisible meaningLanguage sessionMinutes hiddenWords interests hasOnboarded")
         root["practice"]?.takeUnless { it == JsonNull }?.jsonObject?.let { p ->
             fields(p, "expressions corrections")
-            p.getValue("expressions").jsonArray.forEach { fields(it.jsonObject, "id languageID text meaning context createdAt") }
-            p.getValue("corrections").jsonArray.forEach { fields(it.jsonObject, "id languageID original corrected explanation createdAt sourceSessionID sourcePassageID revisionKey") }
+            fun numericDate(obj: JsonObject, name: String) {
+                val value = obj[name] ?: return
+                if (value == JsonNull) return
+                val primitive = value as? JsonPrimitive ?: throw ArchiveError.INVALID
+                if (primitive.isString || primitive.doubleOrNull == null) throw ArchiveError.INVALID
+            }
+            p.getValue("expressions").jsonArray.forEach {
+                fields(it.jsonObject, "id languageID text meaning context createdAt"); numericDate(it.jsonObject, "createdAt")
+            }
+            p.getValue("corrections").jsonArray.forEach {
+                fields(it.jsonObject, "id languageID original corrected explanation createdAt sourceSessionID sourcePassageID revisionKey")
+                numericDate(it.jsonObject, "createdAt"); numericDate(it.jsonObject, "rehearsedAt")
+            }
         }
         for (value in root.getValue("sessions").jsonArray) {
             val s = value.jsonObject

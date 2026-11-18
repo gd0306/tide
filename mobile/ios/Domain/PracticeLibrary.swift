@@ -21,7 +21,9 @@ public struct SavedCorrection: Codable, Identifiable, Sendable {
 public struct PracticeLibrary: Codable, Sendable {
     public var expressions: [SavedExpression]; public var corrections: [SavedCorrection]
     public init(expressions: [SavedExpression] = [], corrections: [SavedCorrection] = []) { self.expressions = expressions; self.corrections = corrections }
-    private func normalized(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines).precomposedStringWithCanonicalMapping.lowercased() }
+    // Unicode White_Space, explicitly shared with Android (not Foundation's broader set).
+    private static let whitespace = CharacterSet(charactersIn: "\u{0009}\u{000A}\u{000B}\u{000C}\u{000D}\u{0020}\u{0085}\u{00A0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200A}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}")
+    private func normalized(_ text: String) -> String { text.trimmingCharacters(in: Self.whitespace).precomposedStringWithCanonicalMapping.lowercased() }
     public mutating func saveExpression(_ value: SavedExpression) throws -> SavedExpression {
         try PracticeLibrary(expressions: [value]).validate()
         if let existing = expressions.first(where: { $0.languageID == value.languageID && normalized($0.text) == normalized(value.text) }) { return existing }
@@ -34,7 +36,18 @@ public struct PracticeLibrary: Codable, Sendable {
     }
     public mutating func deleteExpression(id: UUID) { expressions.removeAll { $0.id == id } }
     public mutating func deleteCorrection(id: UUID) { corrections.removeAll { $0.id == id } }
-    public mutating func invalidateCorrections(sessions: [SessionRecord]) { corrections.removeAll { !$0.matches(sessions: sessions) } }
+    public mutating func invalidateCorrections(sessions: [SessionRecord]) {
+        let byID = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var cached: [UUID: [String: Passage]] = [:]
+        corrections.removeAll { correction in
+            guard let session = byID[correction.sourceSessionID], session.languageID == correction.languageID else { return true }
+            if cached[session.id] == nil {
+                cached[session.id] = Dictionary(session.passages.filter { $0.speaker == .user }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            }
+            guard let passage = cached[session.id]?[correction.sourcePassageID] else { return true }
+            return passage.revisionKey != correction.revisionKey || passage.text != correction.original
+        }
+    }
     public func merging(_ incoming: PracticeLibrary) throws -> PracticeLibrary {
         try incoming.validate(); var out = self
         for value in incoming.expressions where !out.expressions.contains(where: { $0.id == value.id }) { _ = try out.saveExpression(value) }
@@ -42,7 +55,7 @@ public struct PracticeLibrary: Codable, Sendable {
         try out.validate(); return out
     }
     public func validate() throws {
-        func text(_ s: String, _ max: Int, empty: Bool = false) -> Bool { (empty || !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) && s.unicodeScalars.count <= max }
+        func text(_ s: String, _ max: Int, empty: Bool = false) -> Bool { (empty || !s.trimmingCharacters(in: Self.whitespace).isEmpty) && s.unicodeScalars.count <= max }
         func date(_ d: Date) -> Bool { d >= .distantPast && d <= .distantFuture }
         guard expressions.count <= 2_000, corrections.count <= 2_000, Set(expressions.map(\.id)).count == expressions.count, Set(corrections.map(\.id)).count == corrections.count else { throw ArchiveError.invalid }
         for e in expressions {

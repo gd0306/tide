@@ -1,5 +1,6 @@
 package cn.gd306.tideenglish.core
 
+import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -59,5 +60,39 @@ class PracticeCoreTest {
         assertNull(correction(emptyList()))
         session.correctFragment("x", "Me gusta")
         assertNull(correction(listOf(session)))
+    }
+    @Test fun sharedWhitespaceRules() {
+        val json = kotlinx.serialization.json.Json.parseToJsonElement(java.io.File("../../../packages/fixtures/cross-platform/practice-whitespace.json").readText())
+        for (item in json.jsonObject.getValue("cases").jsonArray.map { it.jsonObject }) {
+            val text = item.getValue("text").jsonPrimitive.content; val blank = item.getValue("blank").jsonPrimitive.boolean
+            val expression = SavedExpression(languageID = "es", text = text, meaning = "m", context = "c")
+            assertEquals(text, blank, try { PracticeLibrary(expressions = mutableListOf(expression)).validate(); false } catch (_: ArchiveError) { true })
+            item["normalized"]?.jsonPrimitive?.content?.let { expected ->
+                val library = PracticeLibrary(); val first = library.saveExpression(expression)
+                assertEquals(first.id, library.saveExpression(expression.copy(id = java.util.UUID.randomUUID().toString(), text = expected)).id)
+                if (expected != "hola") assertNotEquals(first.id, library.saveExpression(expression.copy(id = java.util.UUID.randomUUID().toString(), text = "hola")).id)
+            }
+        }
+    }
+    @Test fun mergeDiscardsStaleIncomingBeforeCapacityCheck() {
+        val old = SessionRecord(languageID = "es"); old.append(Fragment(id = "p", speaker = Speaker.user, text = "wrong", startMS = 0, endMS = 1))
+        val oldP = old.passages.single(); val current = old.copy(fragments = old.fragments.toMutableList()); current.correctFragment("p", "new")
+        val currentP = current.passages.single()
+        val existing = MutableList(2000) { SavedCorrection(languageID = "es", original = currentP.text, corrected = "newer", explanation = "m", sourceSessionID = current.id, sourcePassageID = currentP.id, revisionKey = currentP.revisionKey) }
+        val stale = SavedCorrection(languageID = "es", original = oldP.text, corrected = "right", explanation = "m", sourceSessionID = old.id, sourcePassageID = oldP.id, revisionKey = oldP.revisionKey)
+        val local = Archive(sessions = mutableListOf(current), practice = PracticeLibrary(corrections = existing))
+        val incoming = Archive(sessions = mutableListOf(old), practice = PracticeLibrary(corrections = mutableListOf(stale)))
+        assertEquals(2000, ArchiveCodec.merge(local, incoming).practice!!.corrections.size)
+    }
+    @Test fun falseAndCanonicalCorrectionWithValidSource() {
+        val s = SessionRecord(languageID = "es"); s.append(Fragment(id = "p", speaker = Speaker.user, text = "café", startMS = 0, endMS = 1))
+        val p = s.passages.single()
+        for (result in listOf(PracticeCorrectionResult(false, "casa", "x"), PracticeCorrectionResult(true, "cafe\u0301", "x")))
+            assertNull(result.correction("es", p.text, s.id, p.id, p.revisionKey, listOf(s)))
+    }
+    @Test fun rejectsQuotedPracticeDates() {
+        val source = java.io.File("../../../packages/fixtures/cross-platform/practice-archive.json").readText()
+        for (number in listOf("800000002", "800000004", "800000005"))
+            assertThrows(ArchiveError::class.java) { ArchiveCodec.decode(source.replace(":$number", ":\"$number\"")) }
     }
 }

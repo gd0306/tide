@@ -27,7 +27,9 @@ data class PracticeLibrary(
     var expressions: MutableList<SavedExpression> = mutableListOf(),
     var corrections: MutableList<SavedCorrection> = mutableListOf()
 ) {
-    private fun normalized(text: String) = text.trim().canonical().lowercase(Locale.ROOT)
+    // Unicode White_Space, explicitly shared with Swift.
+    private fun isWhitespace(c: Char) = c.code in 0x09..0x0d || c == '\u0020' || c == '\u0085' || c == '\u00a0' || c == '\u1680' || c.code in 0x2000..0x200a || c == '\u2028' || c == '\u2029' || c == '\u202f' || c == '\u205f' || c == '\u3000'
+    private fun normalized(text: String) = text.trim(::isWhitespace).canonical().lowercase(Locale.ROOT)
     fun saveExpression(value: SavedExpression): SavedExpression {
         PracticeLibrary(expressions = mutableListOf(value)).validate()
         expressions.firstOrNull { it.languageID == value.languageID && normalized(it.text) == normalized(value.text) }?.let { return it }
@@ -41,7 +43,19 @@ data class PracticeLibrary(
     }
     fun deleteExpression(id: String) { expressions.removeAll { it.id.equals(id, true) } }
     fun deleteCorrection(id: String) { corrections.removeAll { it.id.equals(id, true) } }
-    fun invalidateCorrections(sessions: List<SessionRecord>) { corrections.removeAll { !it.matches(sessions) } }
+    fun invalidateCorrections(sessions: List<SessionRecord>) {
+        val byID = sessions.associateBy { it.id.lowercase(Locale.ROOT) }
+        val cached = mutableMapOf<String, Map<String, Passage>>()
+        corrections.removeAll { correction ->
+            val key = correction.sourceSessionID.lowercase(Locale.ROOT)
+            val session = byID[key]
+            if (session == null || session.languageID != correction.languageID) true else {
+                val passages = cached.getOrPut(key) { session.passages.filter { it.speaker == Speaker.user }.associateBy { it.id } }
+                val passage = passages[correction.sourcePassageID]
+                passage == null || passage.revisionKey != correction.revisionKey || passage.text.canonical() != correction.original.canonical()
+            }
+        }
+    }
     fun merging(incoming: PracticeLibrary): PracticeLibrary {
         incoming.validate()
         val out = PracticeLibrary(expressions.toMutableList(), corrections.toMutableList())
@@ -50,7 +64,7 @@ data class PracticeLibrary(
         out.validate(); return out
     }
     fun validate() {
-        fun validText(s: String, max: Int, empty: Boolean = false) = (empty || s.isNotBlank()) && s.codePointCount(0, s.length) <= max
+        fun validText(s: String, max: Int, empty: Boolean = false) = (empty || s.any { !isWhitespace(it) }) && s.codePointCount(0, s.length) <= max
         fun validDate(d: Double) = d.isFinite() && d in -63114076800.0..63113904000.0
         fun validUUID(s: String) = try { UUID.fromString(s).toString().equals(s, true) } catch (_: IllegalArgumentException) { false }
         if (expressions.size > 2000 || corrections.size > 2000 || expressions.map { it.id.lowercase(Locale.ROOT) }.toSet().size != expressions.size || corrections.map { it.id.lowercase(Locale.ROOT) }.toSet().size != corrections.size) throw ArchiveError.INVALID

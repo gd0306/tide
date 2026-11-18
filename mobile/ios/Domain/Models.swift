@@ -250,8 +250,11 @@ public struct Archive: Codable, Sendable {
             session.assessments = session.assessments.compactMap { LearningEngine.validate($0, session: session) }
             candidate.sessions.append(session)
         }
-        if let incomingPractice = incoming.practice { candidate.practice = try (candidate.practice ?? PracticeLibrary()).merging(incomingPractice) }
         candidate.practice?.invalidateCorrections(sessions: candidate.sessions)
+        if var incomingPractice = incoming.practice {
+            incomingPractice.invalidateCorrections(sessions: candidate.sessions)
+            candidate.practice = try (candidate.practice ?? PracticeLibrary()).merging(incomingPractice)
+        }
         try candidate.validate()
         guard try candidate.encoded().count <= Self.maximumEncodedBytes else { throw ArchiveError.tooLarge }
         return candidate
