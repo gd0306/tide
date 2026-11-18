@@ -3,6 +3,26 @@ import XCTest
 final class TideEnglishUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    func testPublicPrivacyExplanationStaysInAppAtLargestChineseTextSize() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--preview", "--preview-personal", "--preview-interface-language=chinese", "--preview-interface-theme=midnight", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        app.buttons["settings-button"].tap()
+        let privacy = app.buttons["settings-privacy-policy"]
+        revealInterfaceControl(privacy, in: app)
+        privacy.tap()
+        XCTAssertTrue(app.staticTexts["保存在设备上"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.state, .runningForeground)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "public-privacy-chinese-midnight-large-type"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        let close = app.buttons["public-information-close"]
+        XCTAssertTrue(close.isHittable)
+        close.tap()
+        XCTAssertTrue(privacy.waitForExistence(timeout: 5))
+    }
+
     private func emailPreview(_ extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--preview", "--preview-provider=deepSeek", "--preview-email-account", "--screenshot=words"] + (extra.contains(where: { $0.hasPrefix("--preview-interface-language=") }) ? [] : ["--preview-interface-language=english"]) + extra

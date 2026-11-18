@@ -79,6 +79,7 @@ fun SettingsScreen(vm: TideEnglishViewModel, onExport: () -> Unit, onImport: () 
                    focusAdvanced: Boolean = false, onDismiss: () -> Unit = {}) {
     TideDialogAppearance()
     val deletionScope = rememberCoroutineScope()
+    val showPublicInformation = rememberPublicInformationOpener()
     var page by rememberSaveable { mutableStateOf("main") }
     var keyDialog by rememberSaveable { mutableStateOf(false) }
     var deleteAll by rememberSaveable { mutableStateOf(false) }
@@ -187,11 +188,11 @@ fun SettingsScreen(vm: TideEnglishViewModel, onExport: () -> Unit, onImport: () 
                     }
                     item {
                         SettingsGroup(stringResource(R.string.settings_section_help_privacy)) {
-                            SettingsRow(stringResource(R.string.common_contact_support), onClick = { open("https://tide-english.example/support/") })
+                            SettingsRow(stringResource(R.string.common_contact_support), onClick = { showPublicInformation(PublicInformationPage.SUPPORT) })
                             SettingsDivider()
-                            SettingsRow(stringResource(R.string.common_privacy_policy), onClick = { open("https://tide-english.example/privacy/") })
+                            SettingsRow(stringResource(R.string.common_privacy_policy), onClick = { showPublicInformation(PublicInformationPage.PRIVACY) })
                             SettingsDivider()
-                            SettingsRow(stringResource(R.string.common_terms_of_use), onClick = { open("https://tide-english.example/terms/") })
+                            SettingsRow(stringResource(R.string.common_terms_of_use), onClick = { showPublicInformation(PublicInformationPage.TERMS) })
                             SettingsDivider()
                             SettingsRow(stringResource(R.string.settings_about), chevron = true,
                                 modifier = Modifier.testTag("settings-about"), onClick = { page = "about" })

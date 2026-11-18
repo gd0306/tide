@@ -508,7 +508,7 @@ struct SettingsView: View {
                     } label: {
                         LabeledContent(UI("AI processing"), value: UI(coordinator.hasAIConsent ? "Allowed" : "Off"))
                     }.accessibilityIdentifier("settings-ai-processing")
-                    Link(UI("Privacy policy"), destination: URL(string: "https://tide-english.example/privacy/")!)
+                    PublicInformationLink(page: .privacy)
                         .accessibilityIdentifier("settings-privacy-policy")
                     NavigationLink(UI("About \(AppBrand.name)")) { AboutTideEnglishView(coordinator: coordinator, hostedAvailable: hostedAvailable) }
                 }
@@ -705,9 +705,9 @@ private struct AboutTideEnglishView: View {
                 if coordinator.modelConfiguration.provider == .openAI {
                     Link(UI("AI Data Controls"), destination: URL(string: "https://developers.openai.com/api/docs/guides/your-data")!)
                 }
-                Link(UI("Contact support"), destination: URL(string: "https://tide-english.example/support/")!)
+                PublicInformationLink(page: .support)
                     .accessibilityIdentifier("settings-support")
-                Link(UI("Terms of use"), destination: URL(string: "https://tide-english.example/terms/")!)
+                PublicInformationLink(page: .terms)
                     .accessibilityIdentifier("settings-terms")
                 Button(UI("Open-source notices")) { notices = true }
             }

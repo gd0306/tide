@@ -12,6 +12,7 @@ DEFAULT_TESTS = [
     "testCompactTranslationKeepsVocabularyVisibleAndPreservesDraftWhenCollapsed",
     "testChineseInterfaceAtLargestTextSizeKeepsControlsReachable",
     "testVocabularyPageWorkDoesNotBlockNavigation",
+    "testPublicPrivacyExplanationStaysInAppAtLargestChineseTextSize",
 ]
 
 

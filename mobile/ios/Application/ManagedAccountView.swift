@@ -107,7 +107,13 @@ struct ManagedAccountView: View {
                                 .frame(width: 206, height: 48)
                                 .accessibilityIdentifier("managed-apple-sign-in")
                         }
-                        Text("By signing in, you agree to the [Terms of use](https://tide-english.example/terms/) and acknowledge the [Privacy policy](https://tide-english.example/privacy/).")
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(InterfacePreferences.shared.language == .chinese
+                                 ? "登录即表示你同意使用条款并知悉隐私政策。"
+                                 : "By signing in, you agree to the terms of use and acknowledge the privacy policy.")
+                            PublicInformationLink(page: .terms)
+                            PublicInformationLink(page: .privacy)
+                        }
                             .font(.footnote).tint(TideEnglishColor.ink)
                             .accessibilityIdentifier("managed-sign-in-agreement")
                         Button("Continue as guest") { dismiss() }
