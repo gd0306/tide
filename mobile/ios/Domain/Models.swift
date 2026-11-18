@@ -162,6 +162,7 @@ public struct SessionRecord: Codable, Identifiable, Sendable {
     public var outputTokens = 0
     public var searchCalls = 0
     public var endReason: String?
+    public var practiceKind: String?
     public init(languageID: String = LanguageRegistry.defaultID, themeID: String? = nil, title: String? = nil) {
         self.languageID = languageID; self.themeID = themeID
         self.title = title ?? LanguageRegistry.module(for: languageID)?.defaultTitle ?? "A conversation"
@@ -212,12 +213,14 @@ public struct Archive: Codable, Sendable {
     public var schemaVersion = 2
     public var sessions: [SessionRecord] = []
     public var preferences = Preferences()
+    public var practice: PracticeLibrary?
     public init() {}
     public static func decode(_ data: Data) throws -> Archive {
         guard data.count <= maximumEncodedBytes else { throw ArchiveError.tooLarge }
         let migrated = try migrate(data)
-        let archive = try JSONDecoder().decode(Archive.self, from: migrated)
+        var archive = try JSONDecoder().decode(Archive.self, from: migrated)
         try archive.validate()
+        archive.practice?.invalidateCorrections(sessions: archive.sessions)
         return archive
     }
     /// Bound the selected file before loading it. The read limit also covers growth after the size check.
@@ -247,6 +250,8 @@ public struct Archive: Codable, Sendable {
             session.assessments = session.assessments.compactMap { LearningEngine.validate($0, session: session) }
             candidate.sessions.append(session)
         }
+        if let incomingPractice = incoming.practice { candidate.practice = try (candidate.practice ?? PracticeLibrary()).merging(incomingPractice) }
+        candidate.practice?.invalidateCorrections(sessions: candidate.sessions)
         try candidate.validate()
         guard try candidate.encoded().count <= Self.maximumEncodedBytes else { throw ArchiveError.tooLarge }
         return candidate
@@ -257,7 +262,9 @@ public struct Archive: Codable, Sendable {
               sessions.count <= Self.maximumSessions,
               preferences.sessionMinutes >= 1, preferences.sessionMinutes <= 60 else { throw ArchiveError.invalid }
         func validDate(_ date: Date) -> Bool { date >= .distantPast && date <= .distantFuture }
+        try practice?.validate()
         for s in sessions {
+            guard s.practiceKind == nil || ["daily", "correction"].contains(s.practiceKind!) else { throw ArchiveError.invalid }
             guard LanguageRegistry.module(for: s.languageID) != nil else { throw ArchiveError.unsupportedLanguage }
             // These generous limits exceed a normal session while keeping UI conversions and totals safe.
             guard s.voiceSeconds.isFinite, (0...31_536_000).contains(s.voiceSeconds),

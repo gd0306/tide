@@ -32,7 +32,7 @@ object LearningEngine {
             var out=word
             if (out.kind==EvidenceKind.independent) {
                 val modeled=session.passages.any { p -> p.speaker==Speaker.assistant && p.startMS<=passage.startMS && passage.startMS-p.endMS<90000 && join(p.fragments.map { it.text }).containsCanonical(word.form) }
-                if (passage.fragments.any { it.meaningVisible || it.typed } || modeled) out=out.copy(kind=EvidenceKind.assisted)
+                if (session.practiceKind == "correction" || passage.fragments.any { it.meaningVisible || it.typed } || modeled) out=out.copy(kind=EvidenceKind.assisted)
             }
             out
         }

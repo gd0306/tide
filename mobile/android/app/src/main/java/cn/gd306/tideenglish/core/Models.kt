@@ -123,7 +123,7 @@ data class SessionRecord(
     var fragments: MutableList<Fragment> = mutableListOf(), var assessments: MutableList<Assessment> = mutableListOf(),
     var translations: MutableMap<String,String> = mutableMapOf(), var topics: MutableList<TopicBrief> = mutableListOf(),
     var voiceSeconds: Double = 0.0, var usageFinal: Boolean = false, var inputTokens: Int = 0,
-    var outputTokens: Int = 0, var searchCalls: Int = 0, var endReason: String? = null
+    var outputTokens: Int = 0, var searchCalls: Int = 0, var endReason: String? = null, var practiceKind: String? = null
 ) {
     val passages get() = Transcript.passages(fragments)
     // Voice captions use the provider timeline, not time since the local connection attempt.
@@ -150,7 +150,7 @@ data class Preferences(
     var meaningLanguage: String = "English", var sessionMinutes: Int = 15, var hiddenWords: List<String> = emptyList(),
     var interests: String = "", var hasOnboarded: Boolean = false, var aiConsentVersion: Int? = null
 )
-@Serializable data class Archive(var schemaVersion: Int = 2, var sessions: MutableList<SessionRecord> = mutableListOf(), var preferences: Preferences = Preferences())
+@Serializable data class Archive(var schemaVersion: Int = 2, var sessions: MutableList<SessionRecord> = mutableListOf(), var preferences: Preferences = Preferences(), var practice: PracticeLibrary? = null)
 class ArchiveError private constructor(val kind: Kind) : Exception() {
     enum class Kind { TOO_LARGE, UNSUPPORTED_VERSION, UNSUPPORTED_LANGUAGE, INVALID }
     companion object {
@@ -174,7 +174,7 @@ object ArchiveCodec {
             requireFields(migrated)
             json.decodeFromJsonElement<Archive>(migrated)
         } catch (e: ArchiveError) { throw e } catch (_: Exception) { throw ArchiveError.INVALID }
-        validate(a); return a
+        validate(a); a.practice?.invalidateCorrections(a.sessions); return a
     }
     fun merge(current: Archive, incoming: Archive): Archive {
         validate(incoming)
@@ -186,6 +186,8 @@ object ArchiveCodec {
             val s = source.copy(fragments=source.fragments.toMutableList(), assessments=source.assessments.toMutableList(), translations=source.translations.toMutableMap(), topics=source.topics.toMutableList())
             s.invalidateChangedAssessments(); s.assessments = s.assessments.mapNotNull { LearningEngine.validate(it,s) }.toMutableList(); out.sessions += s
         }
+        incoming.practice?.let { out.practice = (out.practice ?: PracticeLibrary()).merging(it) }
+        out.practice?.invalidateCorrections(out.sessions)
         validate(out); if (encode(out).toByteArray().size > MAXIMUM_ENCODED_BYTES) throw ArchiveError.TOO_LARGE
         return out
     }
@@ -219,6 +221,11 @@ object ArchiveCodec {
         fields(root, "schemaVersion sessions preferences")
         val preferences = root.getValue("preferences").jsonObject
         fields(preferences, "learningLanguageID meaningVisible meaningLanguage sessionMinutes hiddenWords interests hasOnboarded")
+        root["practice"]?.takeUnless { it == JsonNull }?.jsonObject?.let { p ->
+            fields(p, "expressions corrections")
+            p.getValue("expressions").jsonArray.forEach { fields(it.jsonObject, "id languageID text meaning context createdAt") }
+            p.getValue("corrections").jsonArray.forEach { fields(it.jsonObject, "id languageID original corrected explanation createdAt sourceSessionID sourcePassageID revisionKey") }
+        }
         for (value in root.getValue("sessions").jsonArray) {
             val s = value.jsonObject
             fields(s, "id languageID startedAt title fragments assessments translations topics voiceSeconds usageFinal inputTokens outputTokens searchCalls")
@@ -239,7 +246,9 @@ object ArchiveCodec {
     private fun validate(a: Archive) {
         if (LanguageRegistry.get(a.preferences.learningLanguageID) == null) throw ArchiveError.UNSUPPORTED_LANGUAGE
         if (a.schemaVersion != 2 || a.sessions.size > MAXIMUM_SESSIONS || a.preferences.sessionMinutes !in 1..60 || a.sessions.map { it.id.lowercase() }.toSet().size != a.sessions.size) throw ArchiveError.INVALID
+        a.practice?.validate()
         a.sessions.forEach { s ->
+            if (s.practiceKind != null && s.practiceKind !in listOf("daily", "correction")) throw ArchiveError.INVALID
             if (LanguageRegistry.get(s.languageID) == null) throw ArchiveError.UNSUPPORTED_LANGUAGE
             if (!validUUID(s.id) || !s.voiceSeconds.isFinite() || s.voiceSeconds !in 0.0..31536000.0 || listOf(s.inputTokens,s.outputTokens,s.searchCalls).any { it !in 0..1_000_000_000 } || !validDate(s.startedAt) || s.endedAt?.let { !validDate(it) } == true) throw ArchiveError.INVALID
             if (s.fragments.map { it.id }.toSet().size != s.fragments.size || s.fragments.any { it.startMS < 0 || it.endMS < it.startMS || it.text.length > 50000 || it.revision !in 0..1_000_000 || !validDate(it.receivedAt) }) throw ArchiveError.INVALID

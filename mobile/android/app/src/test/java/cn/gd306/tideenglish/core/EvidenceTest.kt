@@ -11,6 +11,13 @@ class EvidenceTest {
         session.assessments += Assessment(passage.id,passage.revisionKey,Outcome.success,2,"goal","capability", listOf(WordProposal("la casa","house","casa",EvidenceKind.independent,0.95,listOf("target"),"la casa","es")))
         return session
     }
+    @Test fun correctionSessionCannotAwardIndependentRecall() {
+        val encoded = ArchiveCodec.encode(Archive(sessions = mutableListOf(record())))
+        val marked = encoded.replace("\"practiceKind\": null", "\"practiceKind\": \"correction\"")
+        val session = ArchiveCodec.decode(marked).sessions.single()
+        assertEquals(EvidenceKind.assisted, LearningEngine.validate(session.assessments.single(), session)!!.words.single().kind)
+        assertEquals(0, LearningEngine.project(listOf(session), "es").words.single().independentCount)
+    }
     @Test fun correctionsRevokeEvidenceAndTranslationsKeepPreviousText() {
         val s = record(); s.translations["English::target:0"] = "the house"
         s.translations["English::other:0"] = "unrelated"
