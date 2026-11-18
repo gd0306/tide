@@ -108,4 +108,19 @@ final class PracticeCoreTests: XCTestCase {
             XCTAssertThrowsError(try Archive.decode(Data(altered.utf8)))
         }
     }
+    func testSharedPracticeDateTokens() throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../packages/fixtures/cross-platform")
+        let source = try String(contentsOf: directory.appendingPathComponent("practice-archive.json"), encoding: .utf8)
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("practice-date-tokens.json"))) as? [String: [String]])
+        for key in ["valid", "invalid"] {
+            for token in try XCTUnwrap(cases[key]) {
+                for number in ["800000002", "800000004", "800000005"] {
+                    let altered = source.replacingOccurrences(of: ":" + number, with: ":" + token)
+                    XCTAssertNotEqual(altered, source)
+                    if key == "valid" { XCTAssertNoThrow(try Archive.decode(Data(altered.utf8)), token) }
+                    else { XCTAssertThrowsError(try Archive.decode(Data(altered.utf8)), token) }
+                }
+            }
+        }
+    }
 }

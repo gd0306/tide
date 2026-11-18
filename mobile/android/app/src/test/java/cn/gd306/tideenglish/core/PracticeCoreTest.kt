@@ -95,4 +95,18 @@ class PracticeCoreTest {
         for (number in listOf("800000002", "800000004", "800000005"))
             assertThrows(ArchiveError::class.java) { ArchiveCodec.decode(source.replace(":$number", ":\"$number\"")) }
     }
+    @Test fun sharedPracticeDateTokens() {
+        val directory = java.io.File("../../../packages/fixtures/cross-platform")
+        val source = java.io.File(directory, "practice-archive.json").readText()
+        val cases = kotlinx.serialization.json.Json.parseToJsonElement(java.io.File(directory, "practice-date-tokens.json").readText()).jsonObject
+        for (key in listOf("valid", "invalid")) for (element in cases.getValue(key).jsonArray) {
+            val token = element.jsonPrimitive.content
+            for (number in listOf("800000002", "800000004", "800000005")) {
+                val altered = source.replace(":$number", ":$token")
+                assertNotEquals(source, altered)
+                if (key == "valid") ArchiveCodec.decode(altered)
+                else assertThrows("$token in $number", ArchiveError::class.java) { ArchiveCodec.decode(altered) }
+            }
+        }
+    }
 }

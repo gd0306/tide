@@ -227,11 +227,12 @@ object ArchiveCodec {
         fields(preferences, "learningLanguageID meaningVisible meaningLanguage sessionMinutes hiddenWords interests hasOnboarded")
         root["practice"]?.takeUnless { it == JsonNull }?.jsonObject?.let { p ->
             fields(p, "expressions corrections")
+            val jsonNumber = Regex("""-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?""")
             fun numericDate(obj: JsonObject, name: String) {
                 val value = obj[name] ?: return
                 if (value == JsonNull) return
                 val primitive = value as? JsonPrimitive ?: throw ArchiveError.INVALID
-                if (primitive.isString || primitive.doubleOrNull == null) throw ArchiveError.INVALID
+                if (primitive.isString || !jsonNumber.matches(primitive.content) || primitive.doubleOrNull == null) throw ArchiveError.INVALID
             }
             p.getValue("expressions").jsonArray.forEach {
                 fields(it.jsonObject, "id languageID text meaning context createdAt"); numericDate(it.jsonObject, "createdAt")
