@@ -99,6 +99,9 @@ struct CurrentTopicView: View {
 
 struct WordsView: View {
     let coordinator: ConversationCoordinator
+    let rehearse: (SavedCorrection) -> Void
+    @State private var shelf: PracticeShelf?
+    @State private var pendingRehearsal: SavedCorrection?
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var search = ""
     @State private var selected: WordState?
@@ -129,6 +132,13 @@ struct WordsView: View {
                             .disabled(learner.words.isEmpty)
                     }
                 }
+                let shelfLayout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout(spacing: 20))
+                shelfLayout {
+                    Button(UI("Saved expressions"), systemImage: "bookmark") { shelf = .expressions }
+                        .frame(minHeight: 44).accessibilityIdentifier("saved-expressions")
+                    Button(UI("Correction notebook"), systemImage: "text.book.closed") { shelf = .corrections }
+                        .frame(minHeight: 44).accessibilityIdentifier("correction-notebook")
+                }.font(.subheadline)
                 QuickTranslationView(coordinator: coordinator).id(coordinator.language.id)
                 let meaningLayout = typeSize.isAccessibilitySize
                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
@@ -183,7 +193,17 @@ struct WordsView: View {
             }.padding(.horizontal, 24).padding(.vertical, 16)
         }.foregroundStyle(TideEnglishColor.ink).searchable(text: $search, prompt: UI("Find a word"))
             .sheet(item: $selected) { word in WordDetailView(word: word, coordinator: coordinator) }
-            .sheet(isPresented: $sessions) { SessionHistoryView(store: coordinator.store) }
+            .sheet(isPresented: $sessions) { SessionHistoryView(coordinator: coordinator) }
+            .sheet(item: $shelf, onDismiss: {
+                if let correction = pendingRehearsal {
+                    pendingRehearsal = nil
+                    rehearse(correction)
+                }
+            }) { shelf in
+                PracticeShelfView(shelf: shelf, coordinator: coordinator) { correction in
+                    pendingRehearsal = correction; self.shelf = nil
+                }
+            }
             .sheet(item: $flashcards) { session in FlashcardsView(deck: session.deck, coordinator: coordinator) }
     }
 }
@@ -206,6 +226,8 @@ struct WordDetailView: View {
                     Text(UI(word.explanation)).font(.body)
                     Text("“\(word.example)”").font(.system(.title3, design: .rounded)).padding(20).frame(maxWidth: .infinity, alignment: .leading).background(TideEnglishColor.peach, in: RoundedRectangle(cornerRadius: 14))
                     Text(UI("\(word.independentCount) independent uses · Last seen \(word.lastSeen.formatted(date: .abbreviated, time: .omitted))")).font(.footnote).foregroundStyle(TideEnglishColor.secondary)
+                    SaveExpressionButton(coordinator: coordinator, expression: SavedExpression(languageID: store.language.id,
+                        text: word.lemma, meaning: coordinator.vocabularyValue(for: word)?.meaningDefinition ?? word.meaning, context: word.example))
                     Button(UI("Remove from my words"), role: .destructive) { store.hideWord(word.id); dismiss() }.font(.footnote)
                     Spacer()
                 }.padding(28).frame(maxWidth: .infinity, alignment: .leading)
@@ -288,7 +310,7 @@ struct TranscriptView: View {
                                 Text(passage.text).font(.system(.title3, design: .rounded)).textSelection(.enabled)
                                     .accessibilityIdentifier(passage.speaker == .user ? "transcript-user-passage" : "transcript-assistant-passage")
                                 if session.languageID == "zh" { PinyinHelp(text: passage.text) }
-                                if let translation = session.translations[MeaningRequest.cacheKey(revisionKey: passage.revisionKey, language: meaningLanguage)] ?? session.translations[meaningLanguage + "::" + passage.revisionKey] ?? session.translations[passage.revisionKey] {
+                                if let translation = session.cachedTranslation(for: passage, meaningLanguage: meaningLanguage) {
                                     Text(translation).font(.subheadline).foregroundStyle(TideEnglishColor.secondary)
                                 }
                             }.frame(maxWidth: .infinity, alignment: .leading)
@@ -305,7 +327,18 @@ struct TranscriptView: View {
 }
 
 struct SessionHistoryView: View {
-    let store: LearningStore
+    let coordinator: ConversationCoordinator
+    private var store: LearningStore { coordinator.store }
+    @State private var search = ""
+    private var matches: [SessionRecord] {
+        guard !search.isEmpty else { return store.learningSessions }
+        return store.learningSessions.filter { session in
+            session.title.localizedCaseInsensitiveContains(search) || session.passages.contains { passage in
+                passage.text.localizedCaseInsensitiveContains(search) ||
+                    session.cachedTranslation(for: passage, meaningLanguage: store.preferences.meaningLanguage)?.localizedCaseInsensitiveContains(search) == true
+            }
+        }
+    }
     @State private var selected: SessionRecord?
     @State private var deleting: SessionRecord?
     @Environment(\.dismiss) private var dismiss
@@ -313,20 +346,23 @@ struct SessionHistoryView: View {
         NavigationStack {
             List {
                 if store.learningSessions.isEmpty { Text(UI("Your \(store.language.name) conversations will appear here.")).foregroundStyle(TideEnglishColor.secondary) }
-                ForEach(store.learningSessions) { session in
+                if !search.isEmpty && matches.isEmpty { Text(UI("No matches")) }
+                ForEach(matches) { session in
                     Button { selected = session } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(session.title).font(.headline)
                             Text(session.startedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(TideEnglishColor.secondary)
                         }.padding(.vertical, 8)
-                    }.swipeActions { Button(UI("Delete"), role: .destructive) { deleting = session }.disabled(session.endedAt == nil) }
+                    }.accessibilityIdentifier("practice-history-session")
+                        .swipeActions { Button(UI("Delete"), role: .destructive) { deleting = session }.disabled(session.endedAt == nil || coordinator.isRunning) }
                 }
             }.scrollContentBackground(.hidden).background(TideEnglishColor.cream)
+                .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: UI("Search conversations"))
                 .navigationTitle(UI("Past conversations")).navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button(UI("Done")) { dismiss() } } }
-        }.sheet(item: $selected) { session in EditableTranscriptView(sessionID: session.id, store: store) }
+        }.sheet(item: $selected) { session in EditableTranscriptView(sessionID: session.id, coordinator: coordinator) }
             .confirmationDialog(UI("Delete this conversation and its learning evidence?"), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
-                Button(UI("Delete conversation"), role: .destructive) { if let deleting { store.deleteSession(deleting.id) }; deleting = nil }
+                Button(UI("Delete conversation"), role: .destructive) { if let deleting, !coordinator.isRunning { store.deleteSession(deleting.id) }; deleting = nil }
             }
     }
 }
@@ -341,7 +377,8 @@ struct BackupDocument: FileDocument {
 
 struct EditableTranscriptView: View {
     let sessionID: UUID
-    let store: LearningStore
+    let coordinator: ConversationCoordinator
+    private var store: LearningStore { coordinator.store }
     @Environment(\.dismiss) private var dismiss
     @State private var editingID: String?
     @State private var editedText = ""
@@ -356,12 +393,25 @@ struct EditableTranscriptView: View {
                                 Text(UI(passage.speaker == .user ? "YOU" : "TIDE")).font(.caption).tracking(1)
                                 Spacer()
                                 if passage.speaker == .user && session?.endedAt != nil {
-                                    Button(UI("Edit")) { editedText = passage.text; editingID = passage.id }.font(.caption)
+                                    Button(UI("Edit")) { editedText = passage.text; editingID = passage.id }.font(.caption).disabled(coordinator.isRunning)
                                 }
                             }.foregroundStyle(TideEnglishColor.secondary)
                             Text(passage.text).font(.system(.title3, design: .rounded)).textSelection(.enabled)
                                     .accessibilityIdentifier(passage.speaker == .user ? "transcript-user-passage" : "transcript-assistant-passage")
-                            if session?.languageID == "zh" { PinyinHelp(text: passage.text) }
+                            if let session {
+                                if session.languageID == "zh" { PinyinHelp(text: passage.text) }
+                                let translation = session.cachedTranslation(for: passage, meaningLanguage: store.preferences.meaningLanguage)
+                                if let translation {
+                                    Text(translation).foregroundStyle(TideEnglishColor.secondary).accessibilityIdentifier("history-translation")
+                                }
+                                SaveExpressionButton(coordinator: coordinator, expression: SavedExpression(languageID: session.languageID,
+                                    text: passage.text, meaning: translation ?? "", context: session.title, sourceSessionID: sessionID,
+                                    sourcePassageID: passage.id, revisionKey: passage.revisionKey))
+                                if passage.speaker == .user, session.endedAt != nil {
+                                    PassageCorrectionView(coordinator: coordinator, session: session, passage: passage)
+                                        .id(passage.revisionKey)
+                                }
+                            }
                         }
                     }
                     ForEach(session?.topics ?? []) { topic in Text(.init(topic.text)); SourcesView(sources: topic.sources, date: topic.retrievedAt) }
@@ -372,13 +422,13 @@ struct EditableTranscriptView: View {
         }.sheet(isPresented: Binding(get: { editingID != nil }, set: { if !$0 { editingID = nil } })) {
             NavigationStack {
                 VStack(alignment: .leading, spacing: 20) {
-                    TextField(UI("What you said"), text: $editedText, axis: .vertical).lineLimit(4...10).padding(18).background(TideEnglishColor.surface, in: RoundedRectangle(cornerRadius: 20))
+                    TextField(UI("What you said"), text: $editedText, axis: .vertical).accessibilityIdentifier("edit-history-text").lineLimit(4...10).padding(18).background(TideEnglishColor.surface, in: RoundedRectangle(cornerRadius: 20))
                     Text(UI("Correct a misheard phrase. Learning evidence from the old wording will be removed; the original remains in your backup history.")).font(.footnote).foregroundStyle(TideEnglishColor.secondary)
                     Spacer()
                 }.padding(24).background(TideEnglishColor.cream).navigationTitle(UI("What you said")).navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) { Button(UI("Cancel")) { editingID = nil } }
-                        ToolbarItem(placement: .confirmationAction) { Button(UI("Save")) { if let id = editingID { store.correctPassage(sessionID: sessionID, passageID: id, text: editedText) }; editingID = nil } }
+                        ToolbarItem(placement: .confirmationAction) { Button(UI("Save")) { if let id = editingID, !coordinator.isRunning { store.correctPassage(sessionID: sessionID, passageID: id, text: editedText) }; editingID = nil } }
                     }
             }.presentationDetents([.medium, .large])
         }

@@ -7,3 +7,12 @@ public struct DailyPracticePlan: Sendable {
         return DailyPracticePlan(languageID: languageID, themeID: theme.id, words: Array(due.prefix(3)))
     }
 }
+
+public extension SessionRecord {
+    func practiceMinutes(regular: Int) -> Int { practiceKind == "daily" ? 5 : regular }
+
+    func cachedTranslation(for passage: Passage, meaningLanguage: String) -> String? {
+        translations[MeaningRequest.cacheKey(revisionKey: passage.revisionKey, language: meaningLanguage)]
+            ?? translations[meaningLanguage + "::" + passage.revisionKey] ?? translations[passage.revisionKey]
+    }
+}

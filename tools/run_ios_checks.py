@@ -13,6 +13,10 @@ DEFAULT_TESTS = [
     "testChineseInterfaceAtLargestTextSizeKeepsControlsReachable",
     "testVocabularyPageWorkDoesNotBlockNavigation",
     "testPublicPrivacyExplanationStaysInAppAtLargestChineseTextSize",
+    "testDailyPreviewWaitsForStartAtAccessibilitySize",
+    "testHistoryFavoriteDeduplicatesAndSurvivesRelaunch",
+    "testHistoryCorrectionRetriesSavesAndInvalidatesOnEdit",
+    "testSavedCorrectionRehearsesOnTalkAndGuardsActiveActions",
 ]
 
 
@@ -50,19 +54,25 @@ def main():
     ], text=True).strip()
     results = args.results or ROOT / (".build/ios-ui-" + run_id + ".xcresult")
     try:
-        subprocess.run(["xcrun", "simctl", "boot", simulator], check=True)
         command = [
             "xcodebuild", "-project", "mobile/ios/TideEnglish.xcodeproj", "-scheme", "TideEnglish",
             "-configuration", "Debug", "-destination", f"platform=iOS Simulator,id={simulator},arch=arm64",
             "-derivedDataPath", str(args.derived_data), "-clonedSourcePackagesDirPath", str(args.packages),
-            "-resultBundlePath", str(results), "-parallel-testing-enabled", "NO",
+            "-jobs", "1", "-parallel-testing-enabled", "NO",
+            "-maximum-concurrent-test-simulator-destinations", "1",
+            # The integrated driver appends the hardware core count after OTHER_SWIFT_FLAGS.
+            # Schedule one build task and one incremental compile batch at a time.
+            "OTHER_SWIFT_FLAGS=$(inherited) -driver-batch-count 1",
             "ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES", "CODE_SIGNING_ALLOWED=NO",
         ]
+        subprocess.run(command + ["build-for-testing"], cwd=ROOT, check=True)
+        subprocess.run(["xcrun", "simctl", "boot", simulator], check=True)
+        command += ["-resultBundlePath", str(results)]
         for name in args.tests or DEFAULT_TESTS:
             if not name.startswith("test") or not name.isidentifier():
                 raise ValueError("Select an XCTest method name, not a shell command or a live verification flag.")
             command.append("-only-testing:TideEnglishUITests/TideEnglishUITests/" + name)
-        subprocess.run(command + ["test"], cwd=ROOT, check=True)
+        subprocess.run(command + ["test-without-building"], cwd=ROOT, check=True)
     finally:
         subprocess.run(["xcrun", "simctl", "shutdown", simulator], check=False, capture_output=True)
         subprocess.run(["xcrun", "simctl", "delete", simulator], check=True)

@@ -45,7 +45,15 @@ import TideEnglishCore
            let data = try? Data(contentsOf: url), let cache = try? VocabularyCache.decode(data) {
             vocabularyCache = cache
         }
-        container = try ModelContainer(for: StoredArchive.self, configurations: ModelConfiguration(isStoredInMemoryOnly: inMemory, cloudKitDatabase: .none))
+        var configuration = ModelConfiguration(isStoredInMemoryOnly: inMemory, cloudKitDatabase: .none)
+        #if DEBUG && targetEnvironment(simulator)
+        if inMemory, ProcessInfo.processInfo.arguments.contains("--preview-practice"),
+           let arg = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--practice-store=") }),
+           let id = UUID(uuidString: String(arg.dropFirst("--practice-store=".count))) {
+            configuration = ModelConfiguration(url: URL.temporaryDirectory.appendingPathComponent("practice-\(id).store"), cloudKitDatabase: .none)
+        }
+        #endif
+        container = try ModelContainer(for: StoredArchive.self, configurations: configuration)
         let context = container.mainContext
         if let existing = try context.fetch(FetchDescriptor<StoredArchive>()).first {
             document = existing
@@ -94,6 +102,7 @@ import TideEnglishCore
     func deleteSession(_ id: UUID) {
         var candidate = archive
         candidate.sessions.removeAll { $0.id == id }
+        candidate.practice?.corrections.removeAll { $0.sourceSessionID == id }
         do {
             try commit(candidate, tickets: finalAssessmentTickets.filter { $0.sessionID != id })
             onSessionInvalidation?(id)
@@ -101,19 +110,51 @@ import TideEnglishCore
     }
     func hideWord(_ id: String) { archive.preferences.hiddenWords.append(id); persist() }
     func correctPassage(sessionID: UUID, passageID: String, text: String) {
-        guard let index = archive.sessions.firstIndex(where: { $0.id == sessionID }),
-              let passage = archive.sessions[index].passages.first(where: { $0.id == passageID && $0.speaker == .user }) else { return }
+        var candidate = archive
+        guard let index = candidate.sessions.firstIndex(where: { $0.id == sessionID }),
+              candidate.sessions[index].endedAt != nil,
+              let passage = candidate.sessions[index].passages.first(where: { $0.id == passageID && $0.speaker == .user }) else { return }
         for (offset, fragment) in passage.fragments.enumerated() {
-            archive.sessions[index].correctFragment(id: fragment.id, text: offset == 0 ? String(text.prefix(10_000)) : "")
+            candidate.sessions[index].correctFragment(id: fragment.id, text: offset == 0 ? String(text.prefix(10_000)) : "")
         }
-        onSessionInvalidation?(sessionID)
-        finalAssessmentTickets.removeAll { $0.sessionID == sessionID }
-        persist()
+        candidate.practice?.invalidateCorrections(sessions: candidate.sessions)
+        do {
+            try commit(candidate, tickets: finalAssessmentTickets.filter { $0.sessionID != sessionID })
+            onSessionInvalidation?(sessionID)
+        } catch { self.error = "Tide couldn’t save your progress. Please export a backup and try again." }
+    }
+    var practice: PracticeLibrary { archive.practice ?? PracticeLibrary() }
+    func saveExpression(_ value: SavedExpression) throws -> Bool {
+        var library = practice
+        let saved = try library.saveExpression(value)
+        guard !practice.expressions.contains(where: { $0.id == saved.id }) else { return false }
+        try savePractice(library)
+        return true
+    }
+    func saveCorrection(_ value: SavedCorrection) throws {
+        var library = practice
+        guard try library.saveCorrection(value, sessions: archive.sessions) else { throw ArchiveError.invalid }
+        try savePractice(library)
+    }
+    func deleteExpression(_ id: UUID) throws {
+        var library = practice
+        library.deleteExpression(id: id)
+        try savePractice(library)
+    }
+    func deleteCorrection(_ id: UUID) throws {
+        var library = practice
+        library.deleteCorrection(id: id)
+        try savePractice(library)
+    }
+    private func savePractice(_ library: PracticeLibrary) throws {
+        var candidate = archive
+        candidate.practice = library
+        try commit(candidate, tickets: finalAssessmentTickets)
     }
     func deleteAll() {
         let ids = archive.sessions.map(\.id)
         var candidate = archive
-        candidate.sessions = []; candidate.preferences.hiddenWords = []
+        candidate.sessions = []; candidate.preferences.hiddenWords = []; candidate.practice = nil
         var committed = false
         do {
             let files = [migrationBackupURL, vocabularyCacheURL].compactMap { $0 }

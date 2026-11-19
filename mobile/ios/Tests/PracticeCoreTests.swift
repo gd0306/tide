@@ -2,6 +2,30 @@ import XCTest
 @testable import TideEnglishCore
 
 final class PracticeCoreTests: XCTestCase {
+    func testDailyLimitDoesNotAffectOtherSessionsOrPreferences() {
+        var archive = Archive()
+        archive.preferences.sessionMinutes = 25
+        var session = SessionRecord()
+        for (kind, expected) in [(nil, 25), ("daily", 5), ("correction", 25)] as [(String?, Int)] {
+            session.practiceKind = kind
+            XCTAssertEqual(session.practiceMinutes(regular: archive.preferences.sessionMinutes), expected)
+        }
+        XCTAssertEqual(archive.preferences.sessionMinutes, 25)
+    }
+    func testHistoryTranslationUsesCurrentRevisionAndSupportsOldCaches() {
+        var session = SessionRecord(languageID: "fr")
+        session.append(Fragment(id: "p", speaker: .user, text: "Je vais hier.", startMS: 0, endMS: 1))
+        let passage = session.passages[0], key = passage.revisionKey
+        let current = MeaningRequest.cacheKey(revisionKey: key, language: "English")
+        session.translations = [key: "oldest", "English::" + key: "legacy", current: "current"]
+        XCTAssertEqual(session.cachedTranslation(for: passage, meaningLanguage: "English"), "current")
+        session.translations.removeValue(forKey: current)
+        XCTAssertEqual(session.cachedTranslation(for: passage, meaningLanguage: "English"), "legacy")
+        session.translations.removeValue(forKey: "English::" + key)
+        XCTAssertEqual(session.cachedTranslation(for: passage, meaningLanguage: "English"), "oldest")
+        session.correctFragment(id: "p", text: "Je suis allé hier.")
+        XCTAssertNil(session.cachedTranslation(for: session.passages[0], meaningLanguage: "English"))
+    }
     func testLibraryDeduplicatesAndInvalidatesRevisions() throws {
         var session = SessionRecord(languageID: "es")
         session.append(Fragment(id: "p", speaker: .user, text: "Yo gusto café", startMS: 0, endMS: 1))

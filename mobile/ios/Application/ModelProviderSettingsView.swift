@@ -109,6 +109,8 @@ struct ModelProviderSettingsView: View {
             Section(UI("Voice")) {
                 Text(UI(voiceDescription))
                     .accessibilityIdentifier("model-voice-description")
+                Text(UI("Saving a key stores the credential on this iPhone. Start a conversation to use voice, or check a sentence to use the text model."))
+                    .font(.footnote).foregroundStyle(TideEnglishColor.secondary)
                 Text(UI("The voice model is separate from the chat model above."))
                     .font(.footnote).foregroundStyle(TideEnglishColor.secondary)
                 if configuration.provider == .gemini {

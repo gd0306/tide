@@ -3,6 +3,113 @@ import XCTest
 final class TideEnglishUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    private func practicePreview(_ extra: [String] = []) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["--preview", "--preview-provider=deepSeek", "--preview-practice",
+                               "--preview-interface-language=english"] + extra
+        app.launch()
+        return app
+    }
+
+    func testDailyPreviewWaitsForStartAtAccessibilitySize() {
+        let app = practicePreview(["--preview-interface-theme=midnight", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
+        let daily = app.buttons["daily-practice"]
+        XCTAssertTrue(daily.waitForExistence(timeout: 5))
+        daily.tap()
+        XCTAssertTrue(app.staticTexts["daily-goal"].exists)
+        XCTAssertFalse(app.buttons["ai-consent-agree"].exists)
+        keepVocabularyScreenshot(app, name: "daily-preview-midnight-large-type")
+        let start = app.buttons["start-daily-practice"]
+        revealInterfaceControl(start, in: app)
+        start.tap()
+        XCTAssertTrue(app.buttons["ai-consent-agree"].waitForExistence(timeout: 5))
+    }
+
+    private func openPracticeHistory(_ app: XCUIApplication) {
+        app.buttons["tab-words"].tap()
+        let history = app.buttons["Past conversations"]
+        revealInterfaceControl(history, in: app)
+        history.tap()
+        let search = app.searchFields.firstMatch
+        search.tap()
+        search.typeText("yesterday")
+        app.buttons["practice-history-session"].firstMatch.tap()
+        XCTAssertEqual(app.staticTexts["history-translation"].firstMatch.label, "I went yesterday.")
+    }
+
+    func testHistoryFavoriteDeduplicatesAndSurvivesRelaunch() {
+        let app = practicePreview(["--preview-interface-theme=grove", "--practice-store=" + UUID().uuidString])
+        openPracticeHistory(app)
+        let save = app.buttons["save-expression"].firstMatch
+        save.tap()
+        XCTAssertTrue(app.staticTexts["Expression saved."].exists)
+        save.tap()
+        XCTAssertTrue(app.staticTexts["Already saved."].exists)
+        app.terminate()
+        app.launch()
+        app.buttons["tab-words"].tap()
+        let favorites = app.buttons["saved-expressions"]
+        revealInterfaceControl(favorites, in: app)
+        favorites.tap()
+        XCTAssertEqual(app.buttons.matching(identifier: "saved-expression-row").count, 1)
+        keepVocabularyScreenshot(app, name: "saved-expressions-grove")
+        app.buttons["saved-expression-row"].tap()
+        XCTAssertTrue(app.staticTexts["Je vais hier."].exists)
+        XCTAssertTrue(app.staticTexts["I went yesterday."].exists)
+    }
+
+    func testHistoryCorrectionRetriesSavesAndInvalidatesOnEdit() {
+        let app = practicePreview(["--practice-consent", "--practice-first-failure"])
+        openPracticeHistory(app)
+        app.buttons["request-correction"].tap()
+        let retry = app.buttons["retry-correction"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5))
+        retry.tap()
+        XCTAssertTrue(app.staticTexts["correction-suggestion"].waitForExistence(timeout: 5))
+        keepVocabularyScreenshot(app, name: "history-correction-result")
+        app.buttons["save-correction"].tap()
+        XCTAssertTrue(app.staticTexts["Correction saved."].exists)
+        app.buttons["Edit"].tap()
+        let field = app.descendants(matching: .any).matching(identifier: "edit-history-text").firstMatch
+        field.tap()
+        field.typeText(" Really.")
+        app.buttons["Save"].tap()
+        XCTAssertFalse(app.staticTexts["correction-suggestion"].exists)
+        app.buttons["Done"].tap()
+        app.buttons["Done"].tap()
+        let notebook = app.buttons["correction-notebook"]
+        revealInterfaceControl(notebook, in: app)
+        notebook.tap()
+        XCTAssertTrue(app.staticTexts["No saved corrections"].exists)
+    }
+
+    func testSavedCorrectionRehearsesOnTalkAndGuardsActiveActions() {
+        let app = practicePreview(["--practice-consent", "--practice-voice-fixture"])
+        openPracticeHistory(app)
+        app.buttons["request-correction"].tap()
+        let save = app.buttons["save-correction"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5))
+        save.tap()
+        app.buttons["Done"].tap()
+        app.buttons["Done"].tap()
+        let notebook = app.buttons["correction-notebook"]
+        revealInterfaceControl(notebook, in: app)
+        notebook.tap()
+        app.buttons["saved-correction-row"].tap()
+        app.buttons["rehearse-correction"].tap()
+        XCTAssertTrue(app.buttons["End conversation"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Say it again"].exists)
+        XCTAssertFalse(app.buttons["daily-practice"].isEnabled)
+    }
+
+    func testCorrectSentenceShowsNoCorrectionAndCannotBeSaved() {
+        let app = practicePreview(["--practice-consent", "--practice-no-correction"])
+        openPracticeHistory(app)
+        app.buttons["request-correction"].tap()
+        XCTAssertTrue(app.staticTexts["No correction needed."].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["save-correction"].exists)
+    }
+
     func testPublicPrivacyExplanationStaysInAppAtLargestChineseTextSize() {
         let app = XCUIApplication()
         app.launchArguments = ["--preview", "--preview-personal", "--preview-interface-language=chinese", "--preview-interface-theme=midnight", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
