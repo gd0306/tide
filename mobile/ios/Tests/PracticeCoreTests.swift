@@ -148,3 +148,95 @@ final class PracticeCoreTests: XCTestCase {
         }
     }
 }
+
+extension PracticeCoreTests {
+    @MainActor func testPracticeFixtureTypedReplyAndFinalizationNeverAccessLiveProvider() async throws {
+        var keyReads = 0, networkCalls = 0, saved = false
+        let mode = PracticeProviderMode.fixture
+        let response = try await mode.response(purpose: "typed_reply", fixture: { $0 }, provider: {
+            keyReads += 1; networkCalls += 1
+            return "live"
+        })
+        mode.finalize(saveLocal: { saved = true }, provider: { keyReads += 1; networkCalls += 1 })
+        XCTAssertNotEqual(response, "live")
+        XCTAssertTrue(saved)
+        XCTAssertEqual(keyReads, 0)
+        XCTAssertEqual(networkCalls, 0)
+    }
+
+    func testPracticeKeySetupRequiresSavedKeyAndExplicitlyResolvesOriginalIntent() throws {
+        var archive = Archive()
+        archive.preferences.sessionMinutes = 15
+        var session = SessionRecord(languageID: "en")
+        session.append(Fragment(id: "sample", speaker: .user, text: "I goes.", startMS: 0, endMS: 40))
+        session.endedAt = .now; archive.sessions = [session]
+        let passage = session.passages[0]
+        let correction = SavedCorrection(languageID: "en", original: passage.text, corrected: "I go.", explanation: "Subject agreement.",
+            sourceSessionID: session.id, sourcePassageID: passage.id, revisionKey: passage.revisionKey)
+        archive.practice = PracticeLibrary(corrections: [correction])
+        let language = try XCTUnwrap(LanguageRegistry.module(for: "en"))
+        let plan = try XCTUnwrap(DailyPracticePlan.make(languageID: "en", words: []))
+        for intent in [PracticeStart.daily(plan), .correction(correction)] {
+            var setup = PracticeKeySetup()
+            setup.awaitKey(for: intent)
+            XCTAssertNil(setup.finishSettings(), "Cancelling key setup must discard the old intent")
+            setup.awaitKey(for: intent)
+            setup.keyWasSaved = true
+            let selected = try XCTUnwrap(setup.finishSettings())
+            XCTAssertEqual(selected.kind, intent.kind)
+            XCTAssertNil(setup.finishSettings())
+            var record = SessionRecord(languageID: "en")
+            record.practiceKind = selected.kind
+            XCTAssertEqual(record.practiceMinutes(regular: archive.preferences.sessionMinutes), selected.kind == "daily" ? 5 : 15)
+            XCTAssertEqual(selected.theme(language: language, archive: archive)?.id, selected.kind == "daily" ? plan.themeID : "correction")
+            XCTAssertNil(selected.theme(language: try XCTUnwrap(LanguageRegistry.module(for: "fr")), archive: archive))
+            if selected.kind == "correction" {
+                var deleted = archive; deleted.sessions = []
+                XCTAssertNil(selected.theme(language: language, archive: deleted))
+            }
+        }
+        XCTAssertEqual(archive.preferences.sessionMinutes, 15)
+    }
+
+    func testCurrentTopicChosenAfterPracticeSurvivesImmediateNewStart() {
+        let current = ConversationTheme("current", "Today's news", "", "", "", "source", 0)
+        let prior = ConversationTheme("coffee", "Coffee", "", "", "", "order", 0)
+        for kind in ["daily", "correction"] {
+            var session = SessionRecord(languageID: "en", themeID: prior.id)
+            session.practiceKind = kind; session.endedAt = .now
+            XCTAssertEqual(session.nextTheme(selected: current, continuing: false)?.id, current.id)
+            var switchedToNews = session
+            switchedToNews.themeID = "current"
+            XCTAssertEqual(switchedToNews.nextTheme(selected: current, continuing: false)?.id, current.id)
+            XCTAssertNil(session.nextTheme(selected: prior, continuing: false))
+            XCTAssertEqual(session.nextTheme(selected: prior, continuing: true)?.id, prior.id)
+        }
+    }
+
+    @MainActor func testUnrepresentablePassageCannotInvokeCorrectionProviderAndBadOutputIsRetryable() async throws {
+        func passage(text: String, id: String = "p") -> Passage {
+            var session = SessionRecord(languageID: "en")
+            session.append(Fragment(id: id, speaker: .user, text: text, startMS: 0, endMS: 20))
+            return session.passages[0]
+        }
+        var calls = 0
+        let none = #"{"hasCorrection":false,"corrected":"","explanation":""}"#
+        for source in [passage(text: String(repeating: "e\u{301}", count: 1_001)), passage(text: "Hi", id: String(repeating: "i", count: 4_000))] {
+            do {
+                _ = try await PracticeCorrectionResult.request(passage: source) { calls += 1; return none }
+                XCTFail("Unrepresentable source reached the provider")
+            } catch { XCTAssertEqual(error as? PracticeCorrectionError, .unsupportedPassage) }
+        }
+        XCTAssertEqual(calls, 0)
+        let boundary = passage(text: String(repeating: "e\u{301}", count: 1_000))
+        let good = try await PracticeCorrectionResult.request(passage: boundary) { calls += 1; return none }
+        XCTAssertFalse(good.hasCorrection)
+        for bad in ["not JSON", #"{"hasCorrection":true,"corrected":"OK","explanation":""}"#] {
+            do {
+                _ = try await PracticeCorrectionResult.request(passage: boundary) { calls += 1; return bad }
+                XCTFail("Malformed output accepted")
+            } catch { XCTAssertEqual(error as? PracticeCorrectionError, .invalidResponse) }
+        }
+        XCTAssertEqual(calls, 3)
+    }
+}

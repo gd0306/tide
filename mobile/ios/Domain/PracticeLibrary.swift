@@ -54,8 +54,14 @@ public struct PracticeLibrary: Codable, Sendable {
         for value in incoming.corrections where !out.corrections.contains(where: { $0.id == value.id }) { out.corrections.append(value) }
         try out.validate(); return out
     }
+    static func validText(_ value: String, limit: Int) -> Bool {
+        !value.trimmingCharacters(in: whitespace).isEmpty && value.unicodeScalars.count <= limit
+    }
+    static func validCorrectionSource(original: String, passageID: String, revision: String) -> Bool {
+        validText(original, limit: 2_000) && validText(passageID, limit: 4_000) && validText(revision, limit: 4_000)
+    }
     public func validate() throws {
-        func text(_ s: String, _ max: Int, empty: Bool = false) -> Bool { (empty || !s.trimmingCharacters(in: Self.whitespace).isEmpty) && s.unicodeScalars.count <= max }
+        let text = Self.validText
         func date(_ d: Date) -> Bool { d >= .distantPast && d <= .distantFuture }
         guard expressions.count <= 2_000, corrections.count <= 2_000, Set(expressions.map(\.id)).count == expressions.count, Set(corrections.map(\.id)).count == corrections.count else { throw ArchiveError.invalid }
         for e in expressions {
@@ -64,7 +70,7 @@ public struct PracticeLibrary: Codable, Sendable {
         }
         for c in corrections {
             guard LanguageRegistry.module(for: c.languageID) != nil else { throw ArchiveError.unsupportedLanguage }
-            guard text(c.original, 2000), text(c.corrected, 2000), text(c.explanation, 4000), text(c.sourcePassageID, 4000), text(c.revisionKey, 4000), date(c.createdAt), c.rehearsedAt.map(date) ?? true else { throw ArchiveError.invalid }
+            guard Self.validCorrectionSource(original: c.original, passageID: c.sourcePassageID, revision: c.revisionKey), text(c.corrected, 2000), text(c.explanation, 4000), date(c.createdAt), c.rehearsedAt.map(date) ?? true else { throw ArchiveError.invalid }
         }
     }
 }

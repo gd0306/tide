@@ -330,10 +330,16 @@ struct SessionHistoryView: View {
     let coordinator: ConversationCoordinator
     private var store: LearningStore { coordinator.store }
     @State private var search = ""
+    private func title(_ session: SessionRecord) -> String {
+        if session.practiceKind == "correction", session.themeID == "correction", session.title == "Say it again" {
+            return UI("Say it again")
+        }
+        return session.title
+    }
     private var matches: [SessionRecord] {
         guard !search.isEmpty else { return store.learningSessions }
         return store.learningSessions.filter { session in
-            session.title.localizedCaseInsensitiveContains(search) || session.passages.contains { passage in
+            title(session).localizedCaseInsensitiveContains(search) || session.passages.contains { passage in
                 passage.text.localizedCaseInsensitiveContains(search) ||
                     session.cachedTranslation(for: passage, meaningLanguage: store.preferences.meaningLanguage)?.localizedCaseInsensitiveContains(search) == true
             }
@@ -350,7 +356,7 @@ struct SessionHistoryView: View {
                 ForEach(matches) { session in
                     Button { selected = session } label: {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(session.title).font(.headline)
+                            Text(title(session)).font(.headline)
                             Text(session.startedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(TideEnglishColor.secondary)
                         }.padding(.vertical, 8)
                     }.accessibilityIdentifier("practice-history-session")

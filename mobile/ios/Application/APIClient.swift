@@ -6,6 +6,7 @@ struct APIUsage { var input = 0; var output = 0; var searches = 0 }
 struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUsage }
 
 @MainActor final class APIClient {
+    let practiceMode: PracticeProviderMode
     let modelPolicy = PublicInformation.modelPolicy
     var configuration: ProviderConfiguration {
         didSet {
@@ -30,7 +31,7 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
     private var credentialExpiry: Task<Void, Never>?
     func beginVoiceCredential() {
         credentialExpiry?.cancel(); voiceCredential.clear()
-        guard (try? modelPolicy.requireChat(configuration)) != nil, let key = CredentialStore.read(configuration: configuration) else { return }
+        guard practiceMode == .live, (try? modelPolicy.requireChat(configuration)) != nil, let key = CredentialStore.read(configuration: configuration) else { return }
         voiceCredential.begin(key: key)
         expireVoiceCredential(after: .seconds(65 * 60))
     }
@@ -51,6 +52,7 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
         return try credential(configuration: configuration)
     }
     private func credential(configuration captured: ProviderConfiguration) throws -> String {
+        guard practiceMode == .live else { throw CancellationError() }
         _ = try captured.validated()
         let stored = { CredentialStore.read(configuration: captured) }
         let key: String?
@@ -66,6 +68,11 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
         return try ProviderConfiguration.validatedCredential(key)
     }
     init(configuration: ProviderConfiguration = ModelSettings.load()) {
+        #if DEBUG && targetEnvironment(simulator)
+        practiceMode = ProcessInfo.processInfo.arguments.contains("--preview-practice") && ProcessInfo.processInfo.arguments.contains("--preview") ? .fixture : .live
+        #else
+        practiceMode = .live
+        #endif
         self.configuration = configuration
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 45; config.timeoutIntervalForResource = 60
@@ -77,6 +84,7 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
     }
     private func request(_ path: String, body: [String: Any], configuration: ProviderConfiguration, stream: Bool = false) throws -> URLRequest {
         guard canProcessAI() else { throw AIProcessingConsent.ConsentError.required }
+        guard practiceMode == .live else { throw CancellationError() }
         try Task.checkCancellation()
         return try modelPolicy.request(path, body: body, configuration: configuration, stream: stream) {
             try credential(configuration: configuration)
@@ -118,6 +126,16 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
                  purpose: String = "meaning", outputTokenLimit: Int? = nil, onText: (@MainActor (String) -> Void)? = nil) async throws -> APIResult {
         guard canProcessAI() else { throw AIProcessingConsent.ConsentError.required }
         try Task.checkCancellation()
+        return try await practiceMode.response(purpose: purpose, fixture: { text in
+            onText?(text)
+            return APIResult(text: text, sources: [], usage: APIUsage())
+        }, provider: {
+            try await self.providerResponse(instructions: instructions, input: input, schema: schema, search: search,
+                                            purpose: purpose, outputTokenLimit: outputTokenLimit, onText: onText)
+        })
+    }
+    private func providerResponse(instructions: String, input: String, schema: [String: Any]?, search: Bool,
+                                  purpose: String, outputTokenLimit: Int?, onText: (@MainActor (String) -> Void)?) async throws -> APIResult {
         let captured = try configuration.validated()
         let id = UUID()
         let task = Task { @MainActor in

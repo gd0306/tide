@@ -56,12 +56,25 @@ struct RootView: View {
         #endif
         .toolbar(.hidden, for: .tabBar)
         .tint(TideEnglishColor.ink)
-        .sheet(isPresented: $coordinator.showSettings, onDismiss: { Task { await coordinator.refreshContinuation() } }) {
+        .sheet(isPresented: $coordinator.showSettings, onDismiss: {
+            coordinator.settingsClosed()
+            Task { await coordinator.refreshContinuation() }
+        }) {
             SettingsView(coordinator: coordinator)
                 .presentationDetents([.large])
         }
         .sheet(isPresented: $coordinator.showAIConsent, onDismiss: { coordinator.resumeAfterAIConsent() }) {
             AIConsentView(summary: coordinator.providerConsentSummary, agree: { coordinator.acceptAIConsent() }, decline: { coordinator.declineAIConsent() })
+        }
+        .confirmationDialog(UI("Continue your selected practice?"), isPresented: Binding(
+            get: { coordinator.practiceToConfirm != nil },
+            set: { if !$0 { coordinator.cancelPracticeConfirmation() } }
+        ), titleVisibility: .visible, presenting: coordinator.practiceToConfirm) { intent in
+            Button(UI(intent.kind == "daily" ? "Start five-minute practice" : "Say it again")) {
+                coordinator.cancelPracticeConfirmation()
+                coordinator.start(practice: intent)
+            }
+            Button(UI("Cancel"), role: .cancel) { coordinator.cancelPracticeConfirmation() }
         }
         .fullScreenCover(isPresented: $onboarding) { OnboardingView(coordinator: coordinator) { coordinator.store.updatePreferences { $0.hasOnboarded = true }; onboarding = false } }
         .alert(UI("A little interruption"), isPresented: Binding(get: { coordinator.error != nil || coordinator.store.error != nil }, set: { if !$0 { coordinator.error = nil; coordinator.store.error = nil; coordinator.hostedAccessFailure = nil } })) {

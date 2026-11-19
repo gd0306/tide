@@ -249,6 +249,7 @@ struct ModelProviderSettingsView: View {
             configuration = value
             drafts[value.provider] = value
             refreshSavedStatus()
+            coordinator.modelKeySaved(hasSavedKey)
             message = replacement == nil ? "Model settings saved." : "Key saved on this iPhone. It will be checked when you start a conversation."
         } catch {
             message = error.localizedDescription
@@ -269,6 +270,7 @@ struct ModelProviderSettingsView: View {
             key = ""
             coordinator.clearPersonalKeyFailure()
             refreshSavedStatus()
+            coordinator.modelKeySaved(false)
             message = "Key removed. Add a key before talking with \(value.provider.displayName)."
         } catch { message = error.localizedDescription }
     }

@@ -63,7 +63,7 @@ struct SaveExpressionButton: View {
     private func save(_ expression: SavedExpression) {
         guard !coordinator.isRunning else { return }
         do { message = try coordinator.store.saveExpression(expression) ? "Expression saved." : "Already saved." }
-        catch { message = "Couldn’t save the expression. Check its length and try again." }
+        catch { message = "Couldn’t save the expression. Please try again." }
     }
 }
 
@@ -176,7 +176,10 @@ struct PassageCorrectionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if loading {
+            if !PracticeCorrectionResult.canCheck(passage) {
+                Text(UI(PracticeCorrectionError.unsupportedPassage.message))
+                    .font(.footnote).foregroundStyle(TideEnglishColor.secondary)
+            } else if loading {
                 ProgressView(UI("Checking your sentence…"))
             } else if let binding, let result, coordinator.canUseCorrection(binding) {
                 Text(UI("Suggested wording")).font(.caption).foregroundStyle(TideEnglishColor.secondary)
