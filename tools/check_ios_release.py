@@ -22,6 +22,8 @@ NOT_VERIFIED = [
 # Use the same unambiguous ASCII URL grammar as both native readers.
 PUBLIC_URL = re.compile(r"https://([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?((?:/[A-Za-z0-9._~!$&'()*+,;=:@/%-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*)?)")
 DNS_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+# Limit A-labels to the Latin-1 letters and core Han characters shared by all three IDNA codecs.
+DECODED_DNS_LABEL = re.compile(r"(?!-|..--)[a-z0-9\u00e0-\u00f6\u00f8-\u00ff\u4e00-\u9fa5-]+(?<!-)")
 RESERVED = ("example.com", "example.net", "example.org", "example", "test", "invalid", "localhost", "local", "internal", "home.arpa", "onion", "alt", "localdomain", "home", "corp", "lan")
 BASE_URLS = {
     "openAI": "https://api.openai.com/v1", "deepSeek": "https://api.deepseek.com",
@@ -42,6 +44,18 @@ def support_email(value):
             and public_https_url("https://" + domain))
 
 
+def valid_public_dns_label(label):
+    if not DNS_LABEL.fullmatch(label):
+        return False
+    if not label.startswith("xn--"):
+        return True
+    try:
+        decoded = label.encode("ascii").decode("idna")  # Also checks the ASCII round trip.
+    except UnicodeError:
+        return False
+    return DECODED_DNS_LABEL.fullmatch(decoded) is not None
+
+
 def public_https_url(value):
     if not isinstance(value, str) or len(value) > 2048:
         return False
@@ -51,7 +65,7 @@ def public_https_url(value):
     host, port, suffix = match.groups()
     host = host.lower()
     labels = host.split(".")
-    return (len(host) <= 253 and len(labels) > 1 and all(DNS_LABEL.fullmatch(label) for label in labels)
+    return (len(host) <= 253 and len(labels) > 1 and all(valid_public_dns_label(label) for label in labels)
             and labels[-1][0].isalpha()
             and not any(host == name or host.endswith("." + name) for name in RESERVED)
             and (port is None or 1 <= int(port) <= 65535)

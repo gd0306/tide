@@ -45,7 +45,7 @@
       {
         "provider": "custom",
         "model": "synthetic-chat",
-        "baseURL": "https://synthetic-model.org/v1",
+        "baseURL": "https://xn--bcher-kva.synthetic-model.org/v1",
         "filingNumber": "synthetic-filing-for-test-only"
       }
     ]
@@ -73,6 +73,18 @@
       "provider": "custom",
       "model": "synthetic-chat",
       "baseURL": "https://127.0.0.1/v1",
+      "filingNumber": "synthetic-filing-for-test-only"
+    },
+    {
+      "provider": "custom",
+      "model": "synthetic-chat",
+      "baseURL": "https://xn--a.synthetic-model.org/v1",
+      "filingNumber": "synthetic-filing-for-test-only"
+    },
+    {
+      "provider": "custom",
+      "model": "synthetic-chat",
+      "baseURL": "https://xn--fa-hia.synthetic-model.org/v1",
       "filingNumber": "synthetic-filing-for-test-only"
     },
     {
@@ -111,7 +123,9 @@
   ],
   "validURLs": [
     "https://gd306.cn/tide/privacy/",
-    "https://news.synthetic-model.org:8443/a%20b?q=1"
+    "https://news.synthetic-model.org:8443/a%20b?q=1",
+    "https://XN--BCHER-KVA.synthetic-model.org:8443/a%20b?q=1",
+    "https://xn--fiqs8s.synthetic-model.org/privacy"
   ],
   "invalidURLs": [
     "https://bad..site/privacy",
@@ -131,6 +145,9 @@
     "https://bad.site/%5cpath",
     "https://bad.site/%0Apath",
     "https://privacy.alt/page",
-    "https://router.localdomain/"
+    "https://router.localdomain/",
+    "https://xn--a.synthetic-model.org/privacy",
+    "https://xn--fa-hia.synthetic-model.org/privacy",
+    "https://bücher.synthetic-model.org/privacy"
   ]
 }

@@ -5,15 +5,26 @@ public func publicHTTPSURL(_ value: String) -> URL? {
     let pattern = #"\Ahttps://([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?((?:/[A-Za-z0-9._~!$&'()*+,;=:@/%-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*)?)\z"#
     guard value.utf8.count <= 2048, value.range(of: pattern, options: .regularExpression) != nil,
           value.range(of: #"%(?![0-9A-Fa-f]{2})|%(?:0[0-9A-Fa-f]|1[0-9A-Fa-f]|7[Ff]|5[Cc])"#, options: .regularExpression) == nil,
-          let parts = URLComponents(string: value), let host = parts.host?.lowercased(), host.count <= 253,
+          let parts = URLComponents(string: value), let host = parts.encodedHost?.lowercased(), host.count <= 253,
           parts.port.map({ (1...65535).contains($0) }) ?? true else { return nil }
     let labels = host.components(separatedBy: ".")
     let reserved = ["example.com", "example.net", "example.org", "example", "test", "invalid", "localhost", "local", "internal", "home.arpa", "onion", "alt", "localdomain", "home", "corp", "lan"]
-    guard labels.count > 1, labels.allSatisfy({
-        $0.range(of: #"\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z"#, options: .regularExpression) != nil
-    }), let last = labels.last, last.first?.isLetter == true,
+    guard labels.count > 1, labels.allSatisfy(validPublicDNSLabel),
+          let last = labels.last, last.first?.isLetter == true,
           !reserved.contains(where: { host == $0 || host.hasSuffix("." + $0) }) else { return nil }
     return parts.url
+}
+
+private func validPublicDNSLabel(_ label: String) -> Bool {
+    guard label.range(of: #"\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z"#, options: .regularExpression) != nil else { return false }
+    guard label.hasPrefix("xn--") else { return true }
+    // Match the compact A-label repertoire supported by each release validator.
+    let pattern = #"\A(?!-|..--)[a-z0-9\u00e0-\u00f6\u00f8-\u00ff\u4e00-\u9fa5-]+(?<!-)\z"#
+    guard let decoded = URLComponents(string: "https://" + label)?.host,
+          decoded.range(of: pattern, options: .regularExpression) != nil else { return false }
+    var encoded = URLComponents()
+    encoded.host = decoded
+    return encoded.encodedHost == label
 }
 
 public struct PublicMetadata: Decodable, Sendable {

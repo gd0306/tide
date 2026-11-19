@@ -2,19 +2,29 @@ package cn.gd306.tideenglish.core
 
 import android.content.Context
 import cn.gd306.tideenglish.R
+import java.net.IDN
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 private val publicURL = Regex("""https://([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?((?:/[A-Za-z0-9._~!$&'()*+,;=:@/%-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*)?)""")
 private val dnsLabel = Regex("[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+// Match the compact A-label repertoire supported by each release validator.
+private val decodedDnsLabel = Regex("""(?!-|..--)[a-z0-9\u00e0-\u00f6\u00f8-\u00ff\u4e00-\u9fa5-]+(?<!-)""")
 private val reservedNames = listOf("example.com", "example.net", "example.org", "example", "test", "invalid", "localhost", "local", "internal", "home.arpa", "onion", "alt", "localdomain", "home", "corp", "lan")
+
+private fun validPublicDnsLabel(label: String): Boolean {
+    if (!dnsLabel.matches(label)) return false
+    if (!label.startsWith("xn--")) return true
+    val decoded = IDN.toUnicode(label, IDN.USE_STD3_ASCII_RULES)
+    return decodedDnsLabel.matches(decoded) && IDN.toASCII(decoded, IDN.USE_STD3_ASCII_RULES) == label
+}
 
 internal fun isPublicHttpsURL(value: String): Boolean {
     if (value.length > 2048) return false
     val (_, hostValue, port, suffix) = publicURL.matchEntire(value)?.groupValues ?: return false
     val host = hostValue.lowercase()
     val labels = host.split('.')
-    return host.length <= 253 && labels.size > 1 && labels.all(dnsLabel::matches) &&
+    return host.length <= 253 && labels.size > 1 && labels.all(::validPublicDnsLabel) &&
         labels.last().first() in 'a'..'z' &&
         reservedNames.none { host == it || host.endsWith(".$it") } &&
         (port.isEmpty() || port.toInt() in 1..65535) && !Regex("%(?![0-9a-fA-F]{2})|%(?:0[0-9A-Fa-f]|1[0-9A-Fa-f]|7[Ff]|5[Cc])").containsMatchIn(suffix)

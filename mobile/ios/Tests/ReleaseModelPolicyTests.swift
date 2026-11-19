@@ -37,7 +37,8 @@ final class ReleaseModelPolicyTests: XCTestCase {
         blocked(declared, "live/sessions", ["session": ["model": chat.model]], chat)
         blocked(declared, "responses", ["model": chat.model], ProviderConfiguration(provider: .deepSeek))
         var custom = try XCTUnwrap(declared.chatChoices.first { $0.provider == .custom })
-        XCTAssertNoThrow(try declared.request("chat/completions", body: ["model": custom.model], configuration: custom) { "synthetic-key" })
+        let customRequest = try declared.request("chat/completions", body: ["model": custom.model], configuration: custom) { "synthetic-key" }
+        XCTAssertEqual(customRequest.url?.absoluteString, "https://xn--bcher-kva.synthetic-model.org/v1/chat/completions")
         custom.baseURL += "/other"
         blocked(declared, "chat/completions", ["model": custom.model], custom)
         let glm = try XCTUnwrap(declared.chatChoices.first { $0.provider == .glm })
@@ -64,7 +65,9 @@ final class ReleaseModelPolicyTests: XCTestCase {
 
     func testSharedPublicURLs() throws {
         let fixture = try fixture
-        for url in try XCTUnwrap(fixture["validURLs"] as? [String]) { XCTAssertNotNil(publicHTTPSURL(url), url) }
+        for url in try XCTUnwrap(fixture["validURLs"] as? [String]) {
+            XCTAssertEqual(publicHTTPSURL(url)?.absoluteString, url)
+        }
         for url in try XCTUnwrap(fixture["invalidURLs"] as? [String]) { XCTAssertNil(publicHTTPSURL(url), url) }
     }
 }

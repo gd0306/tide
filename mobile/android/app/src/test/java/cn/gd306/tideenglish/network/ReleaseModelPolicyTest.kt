@@ -56,6 +56,15 @@ class ReleaseModelPolicyTest {
         assertEquals(1, requests)
         val custom = declared.chatChoices.single { it.provider == ModelProvider.CUSTOM }
         assertEquals(custom, declared.requireChat(custom))
+        val customHttp = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            assertEquals("https://xn--bcher-kva.synthetic-model.org/v1/chat/completions", request.url.toString())
+            val body = """{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"synthetic-answer"}}]}"""
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .body(body.toResponseBody()).build()
+        }.build()
+        val teaching = ProviderTeachingClient({ custom }, { "synthetic-key" }, customHttp, declared)
+        assertEquals("synthetic-answer", teaching.respond("synthetic", "synthetic input", null, false, null).text)
         assertTrue(runCatching { declared.requireChat(custom.copy(baseURL = custom.baseURL + "/other")) }.isFailure)
         fixture.getValue("invalidDeclarations").jsonArray.forEach { bad ->
             assertTrue(policy(services.toList() + listOf(bad)).chatChoices.isEmpty())

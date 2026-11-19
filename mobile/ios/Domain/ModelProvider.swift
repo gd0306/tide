@@ -48,12 +48,12 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
               baseURL.utf8.allSatisfy({ $0 >= 33 && $0 <= 126 }),
               !baseURL.contains("\\"), !baseURL.contains("%"),
               var url = URLComponents(string: baseURL), url.scheme?.lowercased() == "https",
-              let host = url.host, !host.isEmpty, url.user == nil, url.password == nil,
+              let host = url.encodedHost, !host.isEmpty, url.host != nil, url.user == nil, url.password == nil,
               url.query == nil, url.fragment == nil, url.port == nil || (1...65535).contains(url.port!),
               host.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || [45, 46, 58, 91, 93].contains($0) }),
               url.path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy({ $0 != "." && $0 != ".." }),
               !url.path.contains("//") else { throw ValidationError.endpoint }
-        url.scheme = "https"; url.host = host.lowercased()
+        url.scheme = "https"; url.encodedHost = host.lowercased()
         if url.port == 443 { url.port = nil }
         while url.path.hasSuffix("/") { url.path.removeLast() }
         guard let normalized = url.url?.absoluteString else { throw ValidationError.endpoint }
