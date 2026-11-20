@@ -89,7 +89,8 @@ class ConversationPolicyTest {
         compose.runOnIdle { assertNull(vm.session); assertFalse(vm.hasContinuation); assertFalse(vm.continuationReady) }
     }
 
-    @Test fun legacyContinuationOpensOnlyOptionalEmailIdentityWithoutStartingACall() {
+    @Test fun legacyContinuationKeepsDisabledIdentityClosedWithoutStartingACall() {
+        assertFalse(BuildConfig.TIDE_ENGLISH_EMAIL_ACCOUNTS_ENABLED)
         val saved = SessionRecord(languageID = vm.language.id, endedAt = nowSeconds())
         val provider = vm.conversationProvider
         compose.runOnIdle {
@@ -104,7 +105,8 @@ class ConversationPolicyTest {
         compose.onNodeWithTag("conversation-continuation-sheet").assertDoesNotExist()
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.talk_mic_start_desc)).performClick()
         compose.onNodeWithText(compose.activity.getString(R.string.talk_continue_add_minutes)).assertIsEnabled().performClick()
-        compose.onNodeWithText("Tide account").assertIsDisplayed()
+        compose.onNodeWithText("Tide account").assertDoesNotExist()
+        compose.onNodeWithTag("email-account-done").assertDoesNotExist()
         compose.onNodeWithTag("account-google").assertDoesNotExist()
         compose.onNodeWithTag("account-minute-balance").assertDoesNotExist()
         compose.runOnIdle {
