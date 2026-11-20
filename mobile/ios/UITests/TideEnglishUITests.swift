@@ -30,11 +30,34 @@ final class TideEnglishUITests: XCTestCase {
         let history = app.buttons["Past conversations"]
         revealInterfaceControl(history, in: app)
         history.tap()
-        let search = app.searchFields.firstMatch
+        let search = app.searchFields["Search conversations"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
         search.tap()
         search.typeText("yesterday")
         app.buttons["practice-history-session"].firstMatch.tap()
         XCTAssertEqual(app.staticTexts["history-translation"].firstMatch.label, "I went yesterday.")
+    }
+
+    private func openCorrectionNotebookFromHistory(_ app: XCUIApplication) {
+        app.navigationBars["Our conversation"].buttons["Done"].tap()
+        // Search can keep its Close control in place of the history toolbar.
+        // Closing the transcript may also dismiss the presenting history sheet.
+        let closeSearch = app.buttons["Close"]
+        if closeSearch.exists && closeSearch.isHittable { closeSearch.tap() }
+        let history = app.navigationBars["Past conversations"]
+        if history.waitForExistence(timeout: 2) {
+            let done = history.buttons["Done"]
+            XCTAssertTrue(done.waitForExistence(timeout: 5))
+            done.tap()
+        }
+        let notebook = app.buttons["correction-notebook"]
+        // Past conversations sits at the bottom of Words; the shelves are at its top.
+        for _ in 0..<8 {
+            if notebook.isHittable { break }
+            app.swipeDown()
+        }
+        XCTAssertTrue(notebook.isHittable)
+        notebook.tap()
     }
 
     func testHistoryFavoriteDeduplicatesAndSurvivesRelaunch() {
@@ -75,11 +98,7 @@ final class TideEnglishUITests: XCTestCase {
         field.typeText(" Really.")
         app.buttons["Save"].tap()
         XCTAssertFalse(app.staticTexts["correction-suggestion"].exists)
-        app.buttons["Done"].tap()
-        app.buttons["Done"].tap()
-        let notebook = app.buttons["correction-notebook"]
-        revealInterfaceControl(notebook, in: app)
-        notebook.tap()
+        openCorrectionNotebookFromHistory(app)
         XCTAssertTrue(app.staticTexts["No saved corrections"].exists)
     }
 
@@ -90,11 +109,7 @@ final class TideEnglishUITests: XCTestCase {
         let save = app.buttons["save-correction"]
         XCTAssertTrue(save.waitForExistence(timeout: 5))
         save.tap()
-        app.buttons["Done"].tap()
-        app.buttons["Done"].tap()
-        let notebook = app.buttons["correction-notebook"]
-        revealInterfaceControl(notebook, in: app)
-        notebook.tap()
+        openCorrectionNotebookFromHistory(app)
         app.buttons["saved-correction-row"].tap()
         app.buttons["rehearse-correction"].tap()
         XCTAssertTrue(app.buttons["End conversation"].waitForExistence(timeout: 5))
