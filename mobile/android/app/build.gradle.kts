@@ -34,6 +34,7 @@ android {
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "MANAGED_API_ORIGIN", buildString(tideenglishApiOrigin))
+        buildConfigField("boolean", "PRACTICE_FIXTURES_ALLOWED", "false")
         buildConfigField("boolean", "TIDE_ENGLISH_EMAIL_ACCOUNTS_ENABLED", tideenglishEmailAccounts)
         buildConfigField("String", "TIDE_ENGLISH_EMAIL_ACCOUNT_API_URL", buildString(tideenglishEmailAccountApiOrigin))
         buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", buildString(tideenglishConfiguration("tideenglish.googleServerClientID")))
@@ -59,6 +60,7 @@ android {
         create("uiTest") {
             initWith(getByName("debug"))
             applicationIdSuffix = ".uitest"
+            buildConfigField("boolean", "PRACTICE_FIXTURES_ALLOWED", "true")
             matchingFallbacks += "debug"
             buildConfigField("String", "MANAGED_API_ORIGIN", "\"\"")
             buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", "\"\"")
@@ -77,6 +79,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true; buildConfig = true }
+    // Interface language is chosen in-app and must be bundled regardless of system locale.
+    bundle { language { enableSplit = false } }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     testOptions { unitTests.isReturnDefaultValues = true }
 }

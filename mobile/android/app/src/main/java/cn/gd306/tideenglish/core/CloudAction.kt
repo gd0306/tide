@@ -1,10 +1,12 @@
 package cn.gd306.tideenglish.core
 
 /** Retained in memory across Activity recreation; never written into backups or saved state. */
-sealed interface CloudAction {
+internal sealed interface CloudAction {
     data object StartVoice : CloudAction
     data class SendTyped(val text: String) : CloudAction
     data class Lookup(val word: String, val sentence: String) : CloudAction
     data class CurrentTopic(val query: String) : CloudAction
+    data object StartPractice : CloudAction
+    data class RequestCorrection(val source: CorrectionSource) : CloudAction
     data object Help : CloudAction
 }

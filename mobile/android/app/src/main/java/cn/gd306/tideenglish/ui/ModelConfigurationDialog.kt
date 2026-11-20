@@ -17,12 +17,13 @@ import androidx.compose.ui.semantics.password
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogWindowProvider
+import cn.gd306.tideenglish.R
 import cn.gd306.tideenglish.TideEnglishViewModel
 import cn.gd306.tideenglish.core.ModelProvider
 import cn.gd306.tideenglish.core.ProviderConfiguration
 
 @Composable
-fun ModelConfigurationDialog(vm: TideEnglishViewModel, onDismiss: () -> Unit) {
+fun ModelConfigurationDialog(vm: TideEnglishViewModel, onDismiss: () -> Unit, onSaved: () -> Unit = onDismiss) {
     var provider by remember { mutableStateOf(vm.modelConfiguration.provider) }
     var model by remember { mutableStateOf(vm.modelConfiguration.model) }
     var baseURL by remember { mutableStateOf(vm.modelConfiguration.baseURL) }
@@ -81,19 +82,20 @@ fun ModelConfigurationDialog(vm: TideEnglishViewModel, onDismiss: () -> Unit) {
                 if (error) Text(uiText("Check the model, HTTPS endpoint and key, then try again.", "请检查模型、HTTPS 地址和密钥后重试。"), color = MaterialTheme.colorScheme.error)
                 if (provider == vm.modelConfiguration.provider && baseURL == vm.modelConfiguration.baseURL && vm.hasKey)
                     TideEnglishTextButton(onClick = { vm.deleteKey(); key = "" }, enabled = !vm.isRunning) { Text(uiText("Remove saved key", "移除已保存密钥")) }
+                Text(tideStringResource(R.string.practice_model_chat_explanation), style = MaterialTheme.typography.bodySmall)
                 if (vm.modelPolicy.restricted && !vm.modelPolicy.permitsNative(draft)) {
                     Text(uiText("Native realtime voice is unavailable for this model in this release.", "此版本未开放该模型的原生实时语音。"),
                         style = MaterialTheme.typography.bodySmall)
-                } else Text(uiText("OpenAI, Gemini and GLM support native voice. When native access is unavailable, the same selected provider can use device speech recognition and playback. DeepSeek and Custom use device voice.", "OpenAI、Gemini 和 GLM 支持原生语音。原生访问不可用时，可由同一所选服务商配合设备语音识别和朗读。DeepSeek 和自定义服务使用设备语音。"), style = MaterialTheme.typography.bodySmall)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TideEnglishTextButton(modifier = Modifier.testTag("model-config-cancel"), onClick = { key = ""; onDismiss() }) { Text(uiText("Cancel", "取消")) }
-                    Button(modifier = Modifier.testTag("model-config-save"), enabled = !vm.isRunning && (!vm.modelPolicy.restricted || draft in vm.modelPolicy.chatChoices), onClick = {
+                } else Text(tideStringResource(R.string.practice_model_voice_explanation), style = MaterialTheme.typography.bodySmall)
+                Column(Modifier.fillMaxWidth()) {
+                    TideEnglishTextButton(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("model-config-cancel"), onClick = { key = ""; onDismiss() }) { Text(uiText("Cancel", "取消")) }
+                    Button(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("model-config-save"), enabled = !vm.isRunning && (!vm.modelPolicy.restricted || draft in vm.modelPolicy.chatChoices), onClick = {
                         runCatching {
                             val configuration = ProviderConfiguration(provider, model.trim(), baseURL.trim()).validated()
                             if (key.isNotBlank()) ProviderConfiguration.validatedCredential(key.trim())
                             check(vm.updateModelConfiguration(configuration))
                             if (key.isNotBlank()) vm.saveKey(key.trim(), true)
-                        }.onSuccess { key = ""; onDismiss() }.onFailure { error = true }
+                        }.onSuccess { key = ""; onSaved() }.onFailure { error = true }
                     }) { Text(uiText("Save", "保存")) }
                 }
             }

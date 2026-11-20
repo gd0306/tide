@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import cn.gd306.tideenglish.TideEnglishViewModel
 import cn.gd306.tideenglish.R
 import cn.gd306.tideenglish.core.CloudAction
+import cn.gd306.tideenglish.core.PracticeIntent
 import cn.gd306.tideenglish.core.AccountState
 import cn.gd306.tideenglish.AccountViewModel
 import cn.gd306.tideenglish.MinutePurchaseViewModel
@@ -60,7 +61,7 @@ fun TideEnglishApp(
     onEmailAccount: (() -> Unit)? = null,
     emailAccountSummary: String? = null,
     microphoneMessage: String?,
-    onRequestMicrophone: () -> Unit,
+    onRequestMicrophone: (practice: Boolean) -> Unit,
     onOpenAppSettings: (() -> Unit)?,
     onExport: () -> Unit,
     onImport: () -> Unit,
@@ -82,9 +83,19 @@ fun TideEnglishApp(
     var focusAdvanced by rememberSaveable { mutableStateOf(false) }
     var showMinutes by rememberSaveable { mutableStateOf(false) }
     BackHandler(enabled = tab != 0 && !showSettings && !showAccount && !showMinutes) { tab = 0 }
+    var showCorrectionModel by rememberSaveable { mutableStateOf(false) }
     fun perform(action: CloudAction) {
         when (action) {
-            CloudAction.StartVoice -> if (!vm.needsMinuteAccess()) onRequestMicrophone()
+            CloudAction.StartVoice -> {
+                vm.cancelPractice()
+                if (!vm.needsMinuteAccess()) onRequestMicrophone(false)
+            }
+            CloudAction.StartPractice -> if (vm.confirmPractice()) {
+                if (vm.practiceNeedsModelSetup) vm.openPracticeKeySetup()
+                else if (!vm.needsMinuteAccess()) onRequestMicrophone(true)
+                else vm.cancelPractice()
+            }
+            is CloudAction.RequestCorrection -> vm.requestCorrection(action.source)
             is CloudAction.SendTyped -> vm.sendTyped(action.text)
             is CloudAction.Lookup -> vm.lookup(action.word, action.sentence)
             is CloudAction.CurrentTopic -> vm.currentTopic(action.query)
@@ -92,11 +103,18 @@ fun TideEnglishApp(
         }
     }
     fun withConsent(action: CloudAction) {
-        if (vm.archive.preferences.aiConsentVersion == AI_CONSENT_VERSION) perform(action)
+        if (vm.hasScopedConsent()) perform(action)
         else {
             vm.pendingCloudAction = action
             showConsent = true
         }
+    }
+
+    fun beginPractice(intent: PracticeIntent) {
+        if (!vm.selectPractice(intent)) return
+        tab = 0
+        if (vm.practiceNeedsModelSetup) vm.openPracticeKeySetup()
+        else withConsent(CloudAction.StartPractice)
     }
 
     TidePresentation { TideEnglishTheme {
@@ -148,13 +166,15 @@ fun TideEnglishApp(
                                 onSendTyped = { text -> withConsent(CloudAction.SendTyped(text)) },
                                 onLookup = { word, sentence -> withConsent(CloudAction.Lookup(word, sentence)) },
                                 onHelp = { withConsent(CloudAction.Help) },
+                                onDailyPractice = { beginPractice(PracticeIntent.Daily(it)) },
+                                onCheckCorrection = { withConsent(CloudAction.RequestCorrection(it)) },
                             )
                             1 -> TopicsScreen(
                                 vm,
                                 onChoose = { tab = 0 },
                                 onCurrentTopic = { query -> withConsent(CloudAction.CurrentTopic(query)) },
                             )
-                            2 -> WordsScreen(vm)
+                            2 -> WordsScreen(vm, onRehearse = { beginPractice(PracticeIntent.Rehearsal(it)) })
                         }
                     }
                     Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(108.dp)
@@ -171,8 +191,31 @@ fun TideEnglishApp(
                         SettingsScreen(vm, onExport, onImport, onReviewConsent = {
                             vm.pendingCloudAction = null; showConsent = true
                         }, onAccount = onEmailAccount, accountSummary = emailAccountSummary, focusAdvanced = focusAdvanced,
-                            onDismiss = { showSettings = false; focusAdvanced = false })
+                            onDismiss = { showSettings = false; focusAdvanced = false },
+                            onCheckCorrection = { withConsent(CloudAction.RequestCorrection(it)) })
                     }
+                }
+            }
+
+            vm.correctionState?.let { correction ->
+                PracticeCorrectionDialog(correction, vm.isRunning,
+                    onRetry = { withConsent(CloudAction.RequestCorrection(correction.source)) },
+                    onSave = vm::saveCorrection, onModelSetup = { vm.dismissCorrection(); showCorrectionModel = true },
+                    onDismiss = vm::dismissCorrection)
+            }
+
+            if (showCorrectionModel) ModelConfigurationDialog(vm, onDismiss = { showCorrectionModel = false })
+
+            if (vm.waitingForPracticeKey) ModelConfigurationDialog(vm,
+                onDismiss = { vm.finishPracticeKeySetup(saved = false) },
+                onSaved = { vm.finishPracticeKeySetup(saved = true) })
+
+            if (vm.practiceNeedsConfirmation) {
+                PracticeDialog(stringResource(R.string.practice_continue_title), vm::cancelPractice, "confirm-practice-start") {
+                    Text(stringResource(R.string.practice_continue_message))
+                    PracticeButton(R.string.practice_continue, onClick = {
+                        if (vm.confirmPractice()) withConsent(CloudAction.StartPractice)
+                    }, tag = "continue-practice")
                 }
             }
 
@@ -186,6 +229,7 @@ fun TideEnglishApp(
                 },
                 onDecline = {
                     showConsent = false
+                    if (vm.pendingCloudAction == CloudAction.StartPractice) vm.cancelPractice()
                     vm.pendingCloudAction = null
                 },
             )

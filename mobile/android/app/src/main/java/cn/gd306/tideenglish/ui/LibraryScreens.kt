@@ -3,6 +3,7 @@ package cn.gd306.tideenglish.ui
 import androidx.annotation.StringRes
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -70,6 +71,8 @@ import cn.gd306.tideenglish.R
 import cn.gd306.tideenglish.core.ConversationTheme
 import cn.gd306.tideenglish.core.TopicBrief
 import cn.gd306.tideenglish.core.WordState
+import cn.gd306.tideenglish.core.SavedCorrection
+import cn.gd306.tideenglish.core.SavedExpression
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -206,13 +209,14 @@ private fun CurrentTopicDialog(
 }
 
 @Composable
-fun WordsScreen(vm: TideEnglishViewModel) {
+internal fun WordsScreen(vm: TideEnglishViewModel, onRehearse: (SavedCorrection) -> Unit) {
     val translation = rememberQuickTranslationState(vm)
     val definitionContext = androidx.compose.ui.platform.LocalContext.current
     val definitions = remember(definitionContext.applicationContext, vm.learningDataGeneration) { DefinitionStore.shared(definitionContext.applicationContext, vm.learningDataGeneration.toLong()) }
     androidx.compose.runtime.LaunchedEffect(definitions) { definitions.initialize() }
     var search by rememberSaveable { mutableStateOf("") }
     var selected by remember { mutableStateOf<WordState?>(null) }
+    var practiceLibrary by rememberSaveable { mutableStateOf<Boolean?>(null) }
     var flashcards by remember { mutableStateOf<cn.gd306.tideenglish.core.FlashcardDeck?>(null) }
     val words = vm.learner.words.filter { search.isBlank() || it.lemma.contains(search, true) || it.meaning.contains(search, true) || definitions.matches(definitionKey(vm, it), search) }
     LazyColumn(
@@ -227,6 +231,15 @@ fun WordsScreen(vm: TideEnglishViewModel) {
                         flashcards = cn.gd306.tideenglish.core.FlashcardDeck(vm.learner.words, vm.language.id)
                     }, enabled = vm.learner.words.isNotEmpty(), modifier = Modifier.testTag("open-flashcards"))
                 }
+            }
+        }
+        item {
+            SettingsGroup {
+                SettingsRow(stringResource(R.string.practice_library_expressions), chevron = true,
+                    modifier = Modifier.testTag("open-saved-expressions"), onClick = { practiceLibrary = false })
+                SettingsDivider()
+                SettingsRow(stringResource(R.string.practice_library_corrections), chevron = true,
+                    modifier = Modifier.testTag("open-correction-notebook"), onClick = { practiceLibrary = true })
             }
         }
         item { QuickTranslation(vm, translation) }
@@ -272,6 +285,10 @@ fun WordsScreen(vm: TideEnglishViewModel) {
         }
         item { Spacer(Modifier.height(24.dp)) }
     }
+    practiceLibrary?.let { corrections ->
+        PracticeLibrarySheet(vm, corrections, onRehearse = { practiceLibrary = null; onRehearse(it) },
+            onDismiss = { practiceLibrary = null })
+    }
     flashcards?.let { FlashcardsDialog(it, onDismiss = { flashcards = null }) }
     selected?.let { word -> WordDialog(vm, word, definitions, onRemove = { vm.hideWord(word.id); selected = null }, onDismiss = { selected = null }) }
 }
@@ -280,7 +297,8 @@ fun WordsScreen(vm: TideEnglishViewModel) {
 private fun WordDialog(vm: TideEnglishViewModel, word: WordState, definitions: DefinitionStore, onRemove: () -> Unit, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(28.dp), color = TideEnglishColors.Surface) {
-            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(15.dp)) {
                 Text(word.lemma, style = MaterialTheme.typography.headlineLarge)
                 if (word.id.startsWith("zh|")) PinyinHelp(word.lemma)
                 VocabularyDefinitions(vm, word, definitions)
@@ -294,8 +312,12 @@ private fun WordDialog(vm: TideEnglishViewModel, word: WordState, definitions: D
                     style = MaterialTheme.typography.bodySmall,
                     color = TideEnglishColors.Secondary,
                 )
-                TideEnglishTextButton(onClick = onRemove) { Text(stringResource(R.string.words_remove_button), color = TideEnglishColors.Red) }
-                TideEnglishTextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text(stringResource(R.string.words_done_button)) }
+                SaveExpressionAction(vm, SavedExpression(languageID = word.id.substringBefore('|'), text = word.lemma,
+                    meaning = word.meaning, context = word.example.ifBlank { word.lemma }))
+                TideEnglishTextButton(onClick = onRemove, enabled = !vm.isRunning, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text(stringResource(R.string.words_remove_button), color = TideEnglishColors.Red)
+                }
+                TideEnglishTextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End).heightIn(min = 48.dp)) { Text(stringResource(R.string.words_done_button)) }
             }
         }
     }

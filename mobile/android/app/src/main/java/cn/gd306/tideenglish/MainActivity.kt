@@ -74,14 +74,20 @@ class MainActivity : ComponentActivity() {
             var microphoneMessage by rememberSaveable { mutableStateOf<String?>(null) }
             var microphonePermanentlyDenied by rememberSaveable { mutableStateOf(false) }
             var requestedMicrophone by rememberSaveable { mutableStateOf(false) }
+            var requestedVoicePractice by rememberSaveable { mutableStateOf<Boolean?>(null) }
+            fun completeVoiceStart() {
+                val practice = requestedVoicePractice ?: return
+                requestedVoicePractice = null
+                vm.start(practice) // Notification denial still permits a microphone foreground service.
+            }
             val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-                vm.start() // Denial still permits a microphone foreground service.
+                completeVoiceStart()
             }
             fun startVoice() {
                 if (android.os.Build.VERSION.SDK_INT >= 33 &&
                     ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                     notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                } else vm.start()
+                } else completeVoiceStart()
             }
             val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
                 if (granted) {
@@ -89,6 +95,8 @@ class MainActivity : ComponentActivity() {
                     microphonePermanentlyDenied = false
                     startVoice()
                 } else {
+                    if (requestedVoicePractice == true) vm.cancelPractice()
+                    requestedVoicePractice = null
                     val canAskAgain = shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
                     microphonePermanentlyDenied = requestedMicrophone && !canAskAgain
                     microphoneMessage = if (microphonePermanentlyDenied) {
@@ -126,7 +134,8 @@ class MainActivity : ComponentActivity() {
                 onEmailAccount = if (emailAccount.enabled) ({ if (!vm.isRunning) showEmailAccount = true }) else null,
                 emailAccountSummary = emailState.email,
                 microphoneMessage = microphoneMessage,
-                onRequestMicrophone = {
+                onRequestMicrophone = { practice ->
+                    requestedVoicePractice = practice
                     if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                         microphoneMessage = null
                         startVoice()
