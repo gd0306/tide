@@ -44,6 +44,26 @@ class LearningRepositoryTest {
         assertEquals(restarted.archive, ArchiveCodec.decode(publicExport))
     }
 
+    @Test fun damagedArchiveCanBeExportedAndReopenedAfterRecovery() = withRepository { repository, context ->
+        val file = File(context.filesDir, "learning.json")
+        val damaged = """{"schemaVersion":999,"marker":"original","androidFinalAssessments":["private"]}"""
+        file.writeText(damaged)
+        assertTrue(runCatching { repository.load() }.isFailure)
+        assertEquals("""{"schemaVersion":999,"marker":"original"}""", repository.exportOriginal())
+        assertTrue(runCatching { repository.restore("broken") }.isFailure)
+        assertEquals(damaged, file.readText())
+        val session = SessionRecord(languageID = "fr")
+        repository.restore(ArchiveCodec.encode(Archive(sessions = mutableListOf(session))))
+        val reopened = LearningRepository(context).load()
+        assertEquals(session.id, reopened.archive.sessions.single().id)
+        assertEquals("Imported unfinished conversation", reopened.archive.sessions.single().endReason)
+        assertTrue(reopened.finalAssessments.isEmpty())
+        val copies = File(context.filesDir, "recovery-backups")
+        assertEquals(damaged, copies.listFiles()!!.single().readText())
+        repository.deleteRecoveryBackups()
+        assertFalse(copies.exists())
+    }
+
     @Test fun retryCountsSurviveRestartAndOldArchivesRemainReadable() = withRepository { repository, context ->
         val record = SessionRecord(languageID = "fr", endedAt = nowSeconds()).apply {
             append(Fragment(speaker = Speaker.user, text = "la radio", startMS = 0, endMS = 1_000))

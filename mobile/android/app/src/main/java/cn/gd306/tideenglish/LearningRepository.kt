@@ -13,6 +13,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import java.io.File
+import java.io.InputStream
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -26,18 +27,16 @@ data class LearningSnapshot(val archive: Archive, val finalAssessments: List<Fin
 class LearningRepository(context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
     private val file = AtomicFile(File(context.filesDir, "learning.json"))
-    fun load(): LearningSnapshot {
+    private val backups = File(context.filesDir, "recovery-backups")
+
+    @Synchronized fun exportOriginal() = file.openRead().use { exportOriginalLearningText(readLearningText(it)) }
+    @Synchronized fun restore(data: String) = restoreLearningArchive(data, backups, file::openRead, ::save)
+    fun deleteRecoveryBackups() = deleteLearningBackups(backups)
+
+    @Synchronized fun load(): LearningSnapshot {
         if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) return LearningSnapshot(Archive())
         val snapshot = file.openRead().use { input ->
-            val output = ByteArrayOutputStream()
-            val buffer = ByteArray(65536)
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                require(output.size() + count <= ArchiveCodec.MAXIMUM_ENCODED_BYTES) { "El respaldo local es demasiado grande." }
-                output.write(buffer, 0, count)
-            }
-            val encoded = output.toString(Charsets.UTF_8.name())
+            val encoded = readLearningText(input)
             val archive = ArchiveCodec.decode(encoded)
             val metadata = json.parseToJsonElement(encoded).jsonObject["androidFinalAssessments"]
             val tickets = metadata?.let { json.decodeFromJsonElement<List<FinalAssessmentTicket>>(it) } ?: emptyList()
@@ -58,7 +57,7 @@ class LearningRepository(context: Context) {
         if (unfinished.isNotEmpty()) save(recovered)
         return recovered
     }
-    fun save(snapshot: LearningSnapshot) {
+    @Synchronized fun save(snapshot: LearningSnapshot) {
         // The archive and retry ledger share one AtomicFile commit. Public exports omit this
         // Android-only metadata and remain compatible with the iOS archive format.
         val archive = json.parseToJsonElement(ArchiveCodec.encode(snapshot.archive)).jsonObject
@@ -69,6 +68,53 @@ class LearningRepository(context: Context) {
         try { stream.write(bytes); file.finishWrite(stream) }
         catch (e: Exception) { file.failWrite(stream); throw e }
     }
+}
+
+private fun readLearningText(input: InputStream): String {
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(65536)
+    while (true) {
+        val count = input.read(buffer)
+        if (count < 0) break
+        require(count <= ArchiveCodec.MAXIMUM_ENCODED_BYTES - output.size()) { "The learning archive is too large." }
+        output.write(buffer, 0, count)
+    }
+    return output.toString(Charsets.UTF_8.name())
+}
+
+internal fun exportLearningArchive(archive: Archive, ready: Boolean): String {
+    check(ready) { "The learning archive has not been opened." }
+    return ArchiveCodec.encode(archive)
+}
+
+internal fun exportOriginalLearningText(original: String): String {
+    // A damaged schema can still be exported. If the envelope cannot be parsed,
+    // its device-only retry metadata cannot safely be separated from learning data.
+    val root = Json.parseToJsonElement(original).jsonObject
+    val fields = root - "androidFinalAssessments" - "iosFinalAssessments"
+    return if (root.size == fields.size) original else JsonObject(fields).toString()
+}
+
+internal fun restoreLearningArchive(data: String, backups: File, original: () -> InputStream, save: (LearningSnapshot) -> Unit) {
+    val replacement = LearningSnapshot(ArchiveCodec.merge(Archive(), prepareImportedArchive(data)))
+    check(backups.isDirectory || backups.mkdirs())
+    val copy = File.createTempFile("original-", ".json", backups)
+    try {
+        original().use { input ->
+            copy.outputStream().use { output ->
+                input.copyTo(output)
+                output.fd.sync()
+            }
+        }
+    } catch (error: Exception) {
+        copy.delete()
+        throw error
+    }
+    save(replacement)
+}
+
+internal fun deleteLearningBackups(backups: File) {
+    check(!backups.exists() || backups.deleteRecursively()) { "Some recovery backups could not be deleted." }
 }
 
 /** Publish the merged archive only after the writer commits the complete snapshot. */

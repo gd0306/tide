@@ -2,6 +2,22 @@ import XCTest
 @testable import TideEnglishCore
 
 final class ArchiveDeletionTests: XCTestCase {
+    func testRecoveryBackupsRollbackAndDeleteWithArchive() throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("recovery-backups")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let backup = dir.appendingPathComponent("original.json"), data = Data("original".utf8)
+        try data.write(to: backup)
+        let files = ArchiveDeletionTransaction.learningFiles(in: root), staging = root.appendingPathComponent("pending-deletions")
+        XCTAssertThrowsError(try ArchiveDeletionTransaction.run(files: files, stagingRoot: staging) {
+            throw CocoaError(.fileWriteOutOfSpace)
+        })
+        XCTAssertEqual(try Data(contentsOf: backup), data)
+        try ArchiveDeletionTransaction.run(files: files, stagingRoot: staging) {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path))
+    }
+
     func testStageAndCommitFailuresRestoreBothFiles() throws {
         for failure in ["stage", "commit"] {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

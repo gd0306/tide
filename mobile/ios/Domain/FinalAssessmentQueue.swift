@@ -36,7 +36,10 @@ public struct FinalAssessmentResult: Sendable {
         let request: Task<Void, Never>
         let timer: Task<Void, Never>
     }
-    private var jobs: [UUID: Job] = [:]
+    public var onPendingChange: ((Set<UUID>) -> Void)?
+    private var jobs: [UUID: Job] = [:] {
+        didSet { onPendingChange?(Set(jobs.keys)) }
+    }
 
     public init(timeout: TimeInterval = 15, assess: @escaping (SessionRecord, Passage) async throws -> FinalAssessmentResult) {
         self.timeout = min(15, max(0.001, timeout)); self.assess = assess
@@ -88,6 +91,22 @@ public struct FinalAssessmentTicket: Codable, Sendable {
     public let provider: String
     public let queuedAt: Date
     public var attempts: Int
+    public enum TerminalReason { case expired, exhausted }
+    public func terminalReason(at now: Date) -> TerminalReason? {
+        if now.timeIntervalSince(queuedAt) > 7 * 86400 { return .expired }
+        return attempts >= 3 ? .exhausted : nil
+    }
+}
+
+public struct ForegroundAssessmentBudget {
+    private var processed: Set<UUID> = []
+    public init() {}
+    public private(set) var remaining = 5
+    public func excluding(pending: Set<UUID>, manual: Bool) -> Set<UUID> { manual ? pending : pending.union(processed) }
+    public mutating func record(_ id: UUID) {
+        processed.insert(id)
+        remaining -= 1
+    }
 }
 
 public enum FinalAssessmentRecovery {
@@ -104,8 +123,8 @@ public enum FinalAssessmentRecovery {
     public static func recover(_ sessions: [SessionRecord], tickets: [FinalAssessmentTicket], provider: String,
                                consent: Bool, now: Date = .now, excluding: Set<UUID> = [], limit: Int = 5) -> [SessionRecord] {
         guard consent else { return [] }
-        return tickets.filter { !excluding.contains($0.sessionID) && $0.provider == provider && (0..<3).contains($0.attempts) &&
-            now.timeIntervalSince($0.queuedAt) >= 0 && now.timeIntervalSince($0.queuedAt) <= 7 * 86400 }
+        return tickets.filter { !excluding.contains($0.sessionID) && $0.provider == provider && $0.attempts >= 0 &&
+            $0.terminalReason(at: now) == nil && now >= $0.queuedAt }
             .compactMap { ticket in
                 guard let session = sessions.first(where: { $0.id == ticket.sessionID }), session.endedAt != nil,
                       let passage = session.passages.last(where: { $0.speaker == .user }),

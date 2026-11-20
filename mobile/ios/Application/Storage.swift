@@ -36,7 +36,7 @@ import TideEnglishCore
         migrationBackupURL = inMemory ? nil : Self.supportDirectory
             .appendingPathComponent("before-language-modules.json")
         if !inMemory {
-            try ArchiveDeletionTransaction.recoverPending(files: [migrationBackupURL, vocabularyCacheURL].compactMap { $0 },
+            try ArchiveDeletionTransaction.recoverPending(files: ArchiveDeletionTransaction.learningFiles(in: Self.supportDirectory),
                 stagingRoot: Self.supportDirectory.appendingPathComponent("pending-deletions", isDirectory: true))
         }
         if let url = vocabularyCacheURL,
@@ -155,7 +155,7 @@ import TideEnglishCore
         candidate.sessions = []; candidate.preferences.hiddenWords = []; candidate.practice = nil
         var committed = false
         do {
-            let files = [migrationBackupURL, vocabularyCacheURL].compactMap { $0 }
+            let files = migrationBackupURL == nil ? [] : ArchiveDeletionTransaction.learningFiles(in: Self.supportDirectory)
             if files.isEmpty {
                 try commit(candidate, tickets: []); committed = true
             } else {
@@ -190,7 +190,7 @@ import TideEnglishCore
         vocabularyCache = cache
         guard let url = vocabularyCacheURL else { return }
         do {
-            try ArchiveDeletionTransaction.recoverPending(files: [migrationBackupURL, vocabularyCacheURL].compactMap { $0 },
+            try ArchiveDeletionTransaction.recoverPending(files: ArchiveDeletionTransaction.learningFiles(in: Self.supportDirectory),
                 stagingRoot: Self.supportDirectory.appendingPathComponent("pending-deletions", isDirectory: true))
             let data = try cache.encoded()
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -254,7 +254,7 @@ import TideEnglishCore
         return try ArchiveRecoveryExport.sanitized(document.payload)
     }
     static func restore(_ data: Data) throws {
-        let sanitized = try Archive.decode(data).encoded()
+        let sanitized = try ArchiveRecoveryExport.replacement(data)
         let container = try ModelContainer(for: StoredArchive.self, configurations: ModelConfiguration(cloudKitDatabase: .none))
         guard let document = try container.mainContext.fetch(FetchDescriptor<StoredArchive>()).first else { throw ArchiveError.invalid }
         let directory = LearningStore.supportDirectory.appendingPathComponent("recovery-backups", isDirectory: true)

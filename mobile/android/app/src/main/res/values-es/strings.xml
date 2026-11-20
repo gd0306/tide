@@ -285,4 +285,6 @@
     <string name="practice_model_voice_explanation">Si la voz nativa no está disponible, el proveedor seleccionado puede utilizar el reconocimiento y la reproducción de voz del dispositivo. DeepSeek y Custom usan la voz del dispositivo.</string>
     <string name="history_edit_revision_limit">Este fragmento ha alcanzado su límite de ediciones.</string>
     <string name="practice_correction_source_language">Cambia al idioma de esta conversación para revisar sus frases.</string>
+    <string name="recovery_export_original">Exportar el historial original</string>
+    <string name="recovery_restore_backup">Restaurar el historial desde una copia</string>
 </resources>

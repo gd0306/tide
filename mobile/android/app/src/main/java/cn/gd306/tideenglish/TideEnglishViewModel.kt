@@ -283,7 +283,8 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         { archive = it.archive; finalAssessmentTickets = it.finalAssessments }, { isRunning },
         { snapshot -> withContext(Dispatchers.IO) { repository.save(snapshot) } }, repository::save,
         { presentError(localizedContext().getString(R.string.error_save_progress_failed)) })
-    private var storageReady = false
+    internal var storageReady by mutableStateOf(false); private set
+    internal var canRecoverOriginal by mutableStateOf(false); private set
     private var finalAssessmentTickets: List<FinalAssessmentTicket> = emptyList()
     private val recoveredAssessmentIDs = mutableSetOf<String>()
     private val hostedFinalAssessmentJobs = mutableMapOf<String, Job>()
@@ -319,38 +320,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
 
     init {
         guests?.let { controller -> viewModelScope.launch { controller.state.collect { guestState = it } } }
-        viewModelScope.launch {
-            try {
-                val loaded = withContext(Dispatchers.IO) { repository.load() to runCatching { credentials.hasKey }.getOrDefault(false) }
-                archive = loaded.first.archive
-                val consentScope = runCatching { ProviderConsentScope.key(modelConfiguration) }.getOrNull()
-                if (!providerConsent.getBoolean("migrated", false)) {
-                    val migration = providerConsent.edit().putBoolean("migrated", true)
-                    if (archive.preferences.aiConsentVersion == 1 && ProviderConsentScope.canMigrateLegacy(modelConfiguration))
-                        migration.putString("accepted", consentScope)
-                    check(migration.commit())
-                }
-                if (consentScope == null || providerConsent.getString("accepted", null) != consentScope)
-                    archive = archive.copy(preferences = archive.preferences.copy(aiConsentVersion = null))
-                val providers = providerStore.read(if (loaded.second) ConversationProvider.PERSONAL_KEY else ConversationProvider.HOSTED_MINUTES)
-                hostedSessionIDs = providers.hostedIDs
-                pendingHostedOwnerID = providers.pendingOwnerID
-                accountChangeBlocked = providers.pendingOwnerID != null
-                guests?.recoverAcknowledgedOwnerAtStartup(pendingHostedOwnerID,
-                    clear = { owner -> clearAcknowledgedGuestMarker(owner) },
-                    onFailure = { presentError(localizedContext().getString(R.string.error_guest_secure_storage_unavailable)) })
-                conversationProvider = if (hostedConfiguration == null) ConversationProvider.PERSONAL_KEY else providers.selection
-                finalAssessmentTickets = ConversationProviderPolicy.recoveryTickets(loaded.first.finalAssessments, hostedSessionIDs)
-                hasKey = loaded.second
-                storageReady = true
-                recoverFinalAssessments()
-                refreshHostedReadiness()
-                if (accountChangeBlocked) reconcileHostedSessions()
-            } catch (_: CancellationException) { }
-            catch (_: Exception) {
-                presentError(localizedContext().getString(R.string.error_local_history_unavailable))
-            } finally { loadingHistory = false }
-        }
+        openHistory()
         transport.onEvent = { event ->
             try { handle(event) }
             catch (_: IllegalArgumentException) { notice = localizedContext().getString(R.string.notice_invalid_voice_update) }
@@ -1665,11 +1635,73 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
                 learningDataGeneration++
                 finalAssessments.cancelAll(); hostedSessionIDs.forEach(hostedBindings::forgetLearning)
                 hostedFinalAssessmentJobs.values.toList().forEach { it.cancel() }; hostedFinalAssessmentJobs.clear(); resetConversation()
+                repository.deleteRecoveryBackups()
             })
         } catch (error: CancellationException) { throw error }
         catch (_: Exception) { presentError(localizedContext().getString(R.string.error_save_progress_failed)) }
     }
-    fun exportData(): String = ArchiveCodec.encode(archive)
+    fun retryHistory() {
+        if (!storageReady && !loadingHistory) openHistory()
+    }
+
+    suspend fun exportOriginal(): String {
+        check(canRecoverOriginal && !loadingHistory && !storageReady)
+        return withContext(Dispatchers.IO) { repository.exportOriginal() }
+    }
+
+    fun restoreHistory(backup: String) {
+        if (canRecoverOriginal && !loadingHistory && !storageReady) openHistory(backup)
+    }
+
+    private fun openHistory(backup: String? = null) {
+        loadingHistory = true
+        dismissError()
+        viewModelScope.launch {
+            try {
+                val snapshot = try {
+                    withContext(Dispatchers.IO) {
+                        if (backup != null) repository.restore(backup)
+                        repository.load()
+                    }
+                } catch (error: Exception) {
+                    canRecoverOriginal = true
+                    throw error
+                }
+                canRecoverOriginal = false
+                val keyPresent = withContext(Dispatchers.IO) { runCatching { credentials.hasKey }.getOrDefault(false) }
+                archive = snapshot.archive
+                val consentScope = runCatching { ProviderConsentScope.key(modelConfiguration) }.getOrNull()
+                if (!providerConsent.getBoolean("migrated", false)) {
+                    val migration = providerConsent.edit().putBoolean("migrated", true)
+                    if (archive.preferences.aiConsentVersion == 1 && ProviderConsentScope.canMigrateLegacy(modelConfiguration))
+                        migration.putString("accepted", consentScope)
+                    check(migration.commit())
+                }
+                if (consentScope == null || providerConsent.getString("accepted", null) != consentScope)
+                    archive = archive.copy(preferences = archive.preferences.copy(aiConsentVersion = null))
+                val providers = providerStore.read(if (keyPresent) ConversationProvider.PERSONAL_KEY else ConversationProvider.HOSTED_MINUTES)
+                hostedSessionIDs = providers.hostedIDs
+                pendingHostedOwnerID = providers.pendingOwnerID
+                accountChangeBlocked = providers.pendingOwnerID != null
+                guests?.recoverAcknowledgedOwnerAtStartup(pendingHostedOwnerID,
+                    clear = { owner -> clearAcknowledgedGuestMarker(owner) },
+                    onFailure = { presentError(localizedContext().getString(R.string.error_guest_secure_storage_unavailable)) })
+                conversationProvider = if (hostedConfiguration == null) ConversationProvider.PERSONAL_KEY else providers.selection
+                finalAssessmentTickets = ConversationProviderPolicy.recoveryTickets(snapshot.finalAssessments, hostedSessionIDs)
+                hasKey = keyPresent
+                storageReady = true
+                recoverFinalAssessments()
+                refreshHostedReadiness()
+                if (accountChangeBlocked) reconcileHostedSessions()
+            } catch (_: CancellationException) { }
+            catch (_: Exception) {
+                if (backup != null) presentError(localizedContext().getString(R.string.error_import_failed))
+                else if (storageReady) presentError(localizedContext().getString(R.string.error_local_history_unavailable))
+            } finally { loadingHistory = false }
+        }
+    }
+
+    fun exportData(): String = exportLearningArchive(archive, storageReady)
     suspend fun importData(data: String): Boolean {
         if (isRunning || !storageReady || importing) return false
         importing = true

@@ -65,6 +65,8 @@ fun TideEnglishApp(
     onOpenAppSettings: (() -> Unit)?,
     onExport: () -> Unit,
     onImport: () -> Unit,
+    onExportOriginal: () -> Unit,
+    onRestoreHistory: () -> Unit,
     account: AccountViewModel? = null,
     onGoogleSignIn: () -> Unit = {},
     onSignOut: () -> Unit = {},
@@ -121,6 +123,15 @@ fun TideEnglishApp(
         Surface(Modifier.fillMaxSize(), color = TideEnglishColors.Cream) {
             if (vm.loadingHistory) {
                 Box(Modifier.fillMaxSize().testTag("history-loading"))
+            } else if (!vm.storageReady) {
+                Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing).padding(24.dp)) {
+                    Text(stringResource(R.string.error_local_history_unavailable))
+                    TideEnglishTextButton(onClick = vm::retryHistory) { Text(stringResource(R.string.practice_correction_retry)) }
+                    if (vm.canRecoverOriginal) {
+                        TideEnglishTextButton(onClick = onExportOriginal) { Text(stringResource(R.string.recovery_export_original)) }
+                        TideEnglishTextButton(onClick = onRestoreHistory) { Text(stringResource(R.string.recovery_restore_backup)) }
+                    }
+                }
             } else if (!prefs.hasOnboarded) {
                 OnboardingScreen(prefs.learningLanguageID, prefs.meaningLanguage) { language, meaning ->
                     vm.selectLanguage(language)

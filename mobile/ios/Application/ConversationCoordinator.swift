@@ -22,7 +22,9 @@ import TideEnglishCore
     @ObservationIgnored private var vocabularyKeys: Set<String>?
     private let meanings: MeaningController
     private let finalAssessments: FinalAssessmentQueue
-    private var recoveredAssessmentIDs: Set<UUID> = []
+    private var assessmentBudget = ForegroundAssessmentBudget()
+    private(set) var pendingAssessmentIDs: Set<UUID> = []
+    var hasAssessmentBudget: Bool { assessmentBudget.remaining > 0 }
     private var recoveryForeground = false
     var meaning: String { meanings.text }
     var translating: Bool { meanings.isLoading }
@@ -183,6 +185,7 @@ import TideEnglishCore
             self.session?.inputTokens += result.inputTokens; self.session?.outputTokens += result.outputTokens
             self.save()
         }
+        finalAssessments.onPendingChange = { [weak self] in self?.pendingAssessmentIDs = $0 }
         finalAssessments.onResult = { [weak self] result in
             guard let self, let updated = result.applying(to: self.store.sessions.first(where: { $0.id == result.sessionID })) else { return }
             if self.conversationProvider == .hosted {
@@ -858,22 +861,21 @@ import TideEnglishCore
             return finalAssessments.submit(session)
         } catch { self.error = "Tide couldn’t save your progress. Please try again."; return false }
     }
-    func retryFinalAssessments() {
+    @discardableResult func retryFinalAssessments(manual: Bool = true) -> Bool {
         guard !isPreview, hasAIConsent, conversationProvider == .personalKey,
               CredentialStore.hasKey(configuration: modelConfiguration),
-              let identity = try? ProviderConsent.identity(for: modelConfiguration) else { return }
-        let remaining = max(0, 5 - recoveredAssessmentIDs.count)
-        guard remaining > 0 else { return }
-        let pending = Set(store.finalAssessmentTickets.map(\.sessionID).filter { finalAssessments.isPending($0) })
+              let identity = try? ProviderConsent.identity(for: modelConfiguration) else { return false }
+        let remaining = assessmentBudget.remaining
+        guard remaining > 0 else { return false }
         for record in FinalAssessmentRecovery.recover(store.archive.sessions, tickets: store.finalAssessmentTickets, provider: identity, consent: true,
-            excluding: recoveredAssessmentIDs.union(pending), limit: store.finalAssessmentTickets.count) {
-            guard recoveredAssessmentIDs.count < 5 else { break }
-            if submitFinalAssessment(record, identity: identity) { recoveredAssessmentIDs.insert(record.id) }
+            excluding: assessmentBudget.excluding(pending: pendingAssessmentIDs, manual: manual), limit: remaining) {
+            if submitFinalAssessment(record, identity: identity) { assessmentBudget.record(record.id) }
         }
+        return assessmentBudget.remaining < remaining
     }
     func resume() {
-        if !recoveryForeground { recoveredAssessmentIDs.removeAll(); recoveryForeground = true }
-        retryFinalAssessments()
+        if !recoveryForeground { assessmentBudget = ForegroundAssessmentBudget(); recoveryForeground = true }
+        retryFinalAssessments(manual: false)
         restoreContinuation()
         if state == .ended, let resetDeadline, Date() >= resetDeadline { resetConversation() }
         if hasContinuation { Task { await refreshContinuation() } }

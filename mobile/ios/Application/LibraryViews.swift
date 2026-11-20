@@ -727,9 +727,25 @@ private struct LearningBackupView: View {
             } footer: { Text(UI("Backups include transcripts and learning evidence, never your API key. Import adds conversations with new IDs. Learning stays on this iPhone unless you export it.")) }
             if !coordinator.store.finalAssessmentTickets.isEmpty {
                 Section {
-                    Text(UI("Some conversation assessments are waiting or couldn’t be completed."))
-                    Button(UI("Retry assessments")) { coordinator.retryFinalAssessments() }
-                        .disabled(coordinator.isRunning)
+                    TimelineView(.periodic(from: .now, by: 60)) { context in
+                        let idle = coordinator.store.finalAssessmentTickets.filter { !coordinator.pendingAssessmentIDs.contains($0.sessionID) }
+                        if idle.contains(where: { $0.terminalReason(at: context.date) == .expired }) {
+                            Text(UI("The seven-day retry period has ended for some assessments."))
+                        }
+                        if idle.contains(where: { $0.terminalReason(at: context.date) == .exhausted }) {
+                            Text(UI("Some assessments have used all three attempts."))
+                        }
+                        if !coordinator.pendingAssessmentIDs.isEmpty { Text(UI("Assessment in progress.")) }
+                        if idle.contains(where: { $0.terminalReason(at: context.date) == nil }) {
+                            if coordinator.hasAssessmentBudget {
+                                Button(UI("Retry assessments")) {
+                                    message = coordinator.retryFinalAssessments() ? nil : UI("Check consent, the saved key and the original model provider before retrying.")
+                                }.disabled(coordinator.isRunning)
+                            } else {
+                                Text(UI("The five retries for this visit have been used. Reopen the app to retry."))
+                            }
+                        }
+                    }
                 }
             }
             if let message { Section { Text(UI(message)) } }

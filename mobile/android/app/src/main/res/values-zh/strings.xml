@@ -457,4 +457,6 @@
     <string name="practice_model_voice_explanation">原生实时语音不可用时，所选服务商可以配合设备语音识别和朗读。DeepSeek 和自定义服务使用设备语音。</string>
     <string name="history_edit_revision_limit">这段话已达到编辑次数上限。</string>
     <string name="practice_correction_source_language">请切换到这场会话的学习语言，再检查其中的句子。</string>
+    <string name="recovery_export_original">导出原始学习档案</string>
+    <string name="recovery_restore_backup">从备份恢复学习档案</string>
 </resources>

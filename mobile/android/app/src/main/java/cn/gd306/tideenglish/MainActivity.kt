@@ -107,10 +107,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            var exportingOriginal by rememberSaveable { mutableStateOf(false) }
+            var restoringBackup by rememberSaveable { mutableStateOf(false) }
             val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
                 if (uri != null) lifecycleScope.launch {
                     runCatching {
-                        val encoded = vm.exportData()
+                        val encoded = if (exportingOriginal) vm.exportOriginal() else vm.exportData()
                         withContext(Dispatchers.IO) { writeBoundedUtf8(uri, encoded) }
                     }.onSuccess {
                         Toast.makeText(this@MainActivity, interfaceString(R.string.settings_backup_exported_toast), Toast.LENGTH_SHORT).show()
@@ -121,7 +123,10 @@ class MainActivity : ComponentActivity() {
                 if (uri != null) lifecycleScope.launch {
                     runCatching {
                         val encoded = withContext(Dispatchers.IO) { readBoundedUtf8(uri) }
-                        vm.importData(encoded)
+                        if (restoringBackup) {
+                            vm.restoreHistory(encoded)
+                            false // The ViewModel reopens history and reports the result.
+                        } else vm.importData(encoded)
                     }.onSuccess { imported ->
                         if (imported) Toast.makeText(this@MainActivity, interfaceString(R.string.settings_backup_imported_toast), Toast.LENGTH_SHORT).show()
                     }.onFailure { showFailure(it) }
@@ -145,8 +150,10 @@ class MainActivity : ComponentActivity() {
                     }
                 },
                 onOpenAppSettings = if (microphonePermanentlyDenied) ({ openAppSettings() }) else null,
-                onExport = { exportLauncher.launch("Tide-learning-backup.json") },
-                onImport = { importLauncher.launch(arrayOf("application/json", "text/plain")) },
+                onExport = { exportingOriginal = false; exportLauncher.launch("Tide-learning-backup.json") },
+                onExportOriginal = { exportingOriginal = true; exportLauncher.launch("Tide-original-history.json") },
+                onRestoreHistory = { restoringBackup = true; importLauncher.launch(arrayOf("application/json", "text/plain")) },
+                onImport = { restoringBackup = false; importLauncher.launch(arrayOf("application/json", "text/plain")) },
                 account = account,
                 onGoogleSignIn = ::signInWithGoogle,
                 onSignOut = { changeAccount(delete = false) },

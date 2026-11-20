@@ -354,19 +354,26 @@ public struct ArchiveImportTransaction {
     public private(set) var archive: Archive
     public init(archive: Archive) { self.archive = archive }
     public mutating func importData(_ data: Data, write: (Data) throws -> Void) throws {
+        let candidate = try Self.candidate(from: data, mergingInto: archive)
+        try write(candidate.encoded())
+        archive = candidate
+    }
+    static func candidate(from data: Data, mergingInto archive: Archive) throws -> Archive {
         var incoming = try Archive.decode(data)
         for index in incoming.sessions.indices where incoming.sessions[index].endedAt == nil {
             incoming.sessions[index].endedAt = Date()
             incoming.sessions[index].endReason = "Imported unfinished conversation"
         }
-        let candidate = try archive.merging(incoming)
-        try write(candidate.encoded())
-        archive = candidate
+        return try archive.merging(incoming)
     }
 }
 
 /// Export a recoverable JSON object without leaking device-only work tickets.
 public enum ArchiveRecoveryExport {
+    public static func replacement(_ data: Data) throws -> Data {
+        try ArchiveImportTransaction.candidate(from: data, mergingInto: Archive()).encoded()
+    }
+
     public enum Failure: LocalizedError {
         case unsafePayload
         public var errorDescription: String? { "The original record can’t be safely exported. It remains on this device." }
@@ -380,6 +387,12 @@ public enum ArchiveRecoveryExport {
 
 /// Stages private files before committing archive deletion; abandoned staging is retried safely.
 public enum ArchiveDeletionTransaction {
+    public static func learningFiles(in root: URL) -> [URL] {
+        [root.appendingPathComponent("before-language-modules.json"),
+         root.appendingPathComponent("vocabulary-definitions-v1.json"),
+         root.appendingPathComponent("recovery-backups", isDirectory: true)]
+    }
+
     public enum Failure: LocalizedError {
         case rollbackFailed, cleanupPending
         public var errorDescription: String? {

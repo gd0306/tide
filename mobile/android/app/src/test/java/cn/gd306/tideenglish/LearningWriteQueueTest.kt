@@ -12,6 +12,49 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class LearningWriteQueueTest {
+    @Test fun ordinaryExportRejectsUnloadedArchiveAfterDamagedFile() {
+        val original = kotlin.io.path.createTempFile().toFile()
+        try {
+            original.writeText("""{"schemaVersion":999,"sessions":[]}""")
+            val loaded = runCatching { ArchiveCodec.decode(original.readText()) }
+            assertTrue(loaded.isFailure)
+            assertTrue(runCatching { exportLearningArchive(loaded.getOrDefault(Archive()), loaded.isSuccess) }.isFailure)
+            assertEquals("""{"schemaVersion":999,"sessions":[]}""", original.readText())
+        } finally { original.delete() }
+    }
+
+    @Test fun recoveryRetainsOriginalOnFailuresAndDeletesPrivateCopiesAfterwards() {
+        val root = kotlin.io.path.createTempDirectory().toFile()
+        try {
+            val damaged = """{"schemaVersion":999,"marker":"original","androidFinalAssessments":["private"]}"""
+            val original = root.resolve("learning.json").apply { writeText(damaged) }
+            val backups = root.resolve("recovery-backups")
+            val incoming = Archive(sessions = mutableListOf(SessionRecord(languageID = "fr")))
+            val valid = ArchiveCodec.encode(incoming)
+            assertEquals("""{"schemaVersion":999,"marker":"original"}""", exportOriginalLearningText(original.readText()))
+            assertTrue(runCatching { exportOriginalLearningText("truncated {") }.isFailure)
+            assertTrue(runCatching { restoreLearningArchive("invalid", backups, original::inputStream) { fail() } }.isFailure)
+            assertFalse(backups.exists())
+            backups.writeText("cannot make backup directory")
+            assertTrue(runCatching { restoreLearningArchive(valid, backups, original::inputStream) { fail() } }.isFailure)
+            assertEquals(damaged, original.readText())
+            backups.delete()
+            assertTrue(runCatching {
+                restoreLearningArchive(valid, backups, original::inputStream) { throw IOException("commit failed") }
+            }.isFailure)
+            assertEquals(damaged, original.readText())
+            assertEquals(damaged, backups.listFiles()!!.single().readText())
+            restoreLearningArchive(valid, backups, original::inputStream) {
+                assertTrue(it.finalAssessments.isEmpty())
+                original.writeText(ArchiveCodec.encode(it.archive))
+            }
+            assertEquals("Imported unfinished conversation", ArchiveCodec.decode(original.readText()).sessions.single().endReason)
+            assertTrue(backups.listFiles()!!.all { it.readText() == damaged })
+            deleteLearningBackups(backups)
+            assertFalse(backups.exists())
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun importBarrierAbsorbsOldQueuedSnapshots() = runTest {
         val gate = CompletableDeferred<Unit>()
         var current = LearningSnapshot(Archive())

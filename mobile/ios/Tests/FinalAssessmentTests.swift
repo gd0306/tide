@@ -49,8 +49,35 @@ import XCTest
         session.correctFragment(id: session.fragments[0].id, text: "changed")
         XCTAssertTrue(FinalAssessmentRecovery.recover([session], tickets: tickets, provider: "provider-a", consent: true, now: now).isEmpty)
         XCTAssertTrue(FinalAssessmentRecovery.recover([original], tickets: tickets, provider: "provider-a", consent: true, now: now.addingTimeInterval(8 * 86400)).isEmpty)
+        XCTAssertEqual(tickets[0].terminalReason(at: now.addingTimeInterval(8 * 86400)), .expired)
         tickets[0].attempts = 3
+        XCTAssertEqual(tickets[0].terminalReason(at: now), .exhausted)
         XCTAssertTrue(FinalAssessmentRecovery.recover([original], tickets: tickets, provider: "provider-a", consent: true, now: now).isEmpty)
+    }
+
+    func testManualRetriesAfterAutomaticFailureRespectBothBudgets() async {
+        let sessions = [ended(), ended("fr")]
+        var tickets = sessions.reduce([FinalAssessmentTicket]()) { FinalAssessmentRecovery.enqueue($1, provider: "a", tickets: $0) }
+        var budget = ForegroundAssessmentBudget()
+        var calls = 0
+        let queue = FinalAssessmentQueue { _, _ in calls += 1; throw CancellationError() }
+        for (attempt, id) in [0, 0, 0, 1, 1, 1].enumerated() {
+            let record = sessions[id]
+            let pending: Set<UUID> = queue.isPending(record.id) ? [record.id] : []
+            let candidates = FinalAssessmentRecovery.recover([record], tickets: tickets, provider: "a", consent: true,
+                excluding: budget.excluding(pending: pending, manual: attempt > 0), limit: budget.remaining)
+            if let selected = candidates.first, queue.submit(selected) {
+                tickets[id].attempts += 1
+                budget.record(selected.id)
+                await waitUntil { !queue.isPending(selected.id) }
+            }
+            if attempt == 2 {
+                XCTAssertTrue(FinalAssessmentRecovery.recover([record], tickets: tickets, provider: "a", consent: true).isEmpty)
+            }
+        }
+        XCTAssertEqual(calls, 5)
+        XCTAssertEqual(tickets.map(\.attempts), [3, 2])
+        XCTAssertEqual(budget.remaining, 0)
     }
 
     func testRecoveryLimitsEachPassAndTicketRoundTrip() throws {

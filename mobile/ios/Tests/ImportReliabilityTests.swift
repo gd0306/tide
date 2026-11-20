@@ -24,6 +24,28 @@ final class ImportReliabilityTests: XCTestCase {
             XCTAssertEqual(error.localizedDescription, "The original record can’t be safely exported. It remains on this device.")
         }
     }
+    func testStartupReplacementNormalizesForeignBackup() throws {
+        var incoming = Archive(), session = SessionRecord(languageID: "es")
+        incoming.preferences.aiConsentVersion = 1
+        session.practiceKind = "correction"
+        session.append(Fragment(id: "p", speaker: .user, text: "la radio", startMS: 0, endMS: 1))
+        let p = session.passages[0]
+        session.assessments = [Assessment(passageID: p.id, revisionKey: p.revisionKey, outcome: .success,
+            suggestedLevel: 1, nextGoal: "hola", capability: "hola",
+            words: [WordProposal(lemma: "radio", meaning: "radio", form: "radio", kind: .independent,
+                confidence: 0.95, sourceIDs: ["p"], quote: p.text, language: "es")])]
+        incoming.sessions = [session]
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: incoming.encoded()) as? [String: Any])
+        root["iosFinalAssessments"] = [["provider": "foreign"]]
+        let payload = try ArchiveRecoveryExport.replacement(JSONSerialization.data(withJSONObject: root))
+        let saved = try Archive.decode(payload)
+        XCTAssertNil(saved.preferences.aiConsentVersion)
+        XCTAssertEqual(saved.sessions.first?.assessments.first?.words.first?.kind, .assisted)
+        XCTAssertEqual(saved.sessions.first?.endReason, "Imported unfinished conversation")
+        XCTAssertNotNil(saved.sessions.first?.endedAt)
+        XCTAssertNil((try JSONSerialization.jsonObject(with: payload) as? [String: Any])?["iosFinalAssessments"])
+    }
+
     func testImportedUnfinishedSessionIsClosed() throws {
         var incoming = Archive()
         incoming.sessions = [SessionRecord()]

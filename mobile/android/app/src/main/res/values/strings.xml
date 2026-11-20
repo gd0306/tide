@@ -285,4 +285,6 @@
     <string name="practice_model_voice_explanation">If native access is unavailable, the selected provider can use device speech recognition and playback. DeepSeek and Custom use device speech.</string>
     <string name="history_edit_revision_limit">This passage has reached its edit limit.</string>
     <string name="practice_correction_source_language">Switch to the language of this conversation to check its sentences.</string>
+    <string name="recovery_export_original">Export original history</string>
+    <string name="recovery_restore_backup">Restore history from backup</string>
 </resources>
