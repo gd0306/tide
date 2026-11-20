@@ -11,6 +11,22 @@ final class CrossPlatformFixtureTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
+    func testSharedPracticeArchiveRoundTripsAndKeepsOptionalFields() throws {
+        let data = try Data(contentsOf: directory.appendingPathComponent("practice-archive.json"))
+        let archive = try Archive.decode(data)
+        XCTAssertEqual(archive.sessions.first?.practiceKind, "correction")
+        XCTAssertEqual(archive.practice?.expressions.first?.meaning, "咖啡")
+        XCTAssertEqual(archive.practice?.expressions.last?.createdAt.timeIntervalSinceReferenceDate, 800000003)
+        XCTAssertNil(archive.practice?.expressions.last?.sourceSessionID)
+        XCTAssertEqual(archive.practice?.corrections.first?.rehearsedAt?.timeIntervalSinceReferenceDate, 800000005)
+        XCTAssertEqual(try content(data), try content(archive.encoded()))
+        XCTAssertNil(try Archive.decode(source()).practice)
+        var changed = archive
+        changed.sessions[0].correctFragment(id: "p1", text: "Me gusta café")
+        changed.practice?.invalidateCorrections(sessions: changed.sessions)
+        XCTAssertTrue(try XCTUnwrap(changed.practice).corrections.isEmpty)
+    }
+
     func testAccountAccessMatchesSharedBalanceAndFailureCases() throws {
         let data = try Data(contentsOf: directory.appendingPathComponent("account-access-cases.json"))
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])

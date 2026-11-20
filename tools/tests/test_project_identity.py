@@ -1,5 +1,6 @@
 """Independent project identity and source-layout regression checks."""
 from pathlib import Path
+import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,12 +21,14 @@ class ProjectIdentityTests(unittest.TestCase):
 
     def test_no_previous_brand_in_source_paths_or_text(self):
         old = 'mu' + 'ral'
-        for file in ROOT.rglob('*'):
-            relative = file.relative_to(ROOT)
-            if any(part.startswith('.') or part in ('node_modules', 'build', '__pycache__') for part in relative.parts):
-                continue
+        inventory = subprocess.check_output(
+            ['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], cwd=ROOT,
+        )
+        for name in set(inventory.decode().split('\0')) - {''}:
+            relative = Path(name)
+            file = ROOT / relative
             self.assertNotIn(old, str(relative).lower())
-            if not file.is_file():
+            if file.is_symlink() or not file.is_file():
                 continue
             try:
                 text = file.read_text()

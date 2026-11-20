@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "bundleID": "cn.gd306.tideenglish.ios",
+  "minimumOSVersion": "26.1",
+  "regions": ["CN"],
+  "publisher": {"legalName": "", "supportEmail": ""},
+  "links": {"privacy": "https://gd306.cn/tide/privacy/", "support": "https://gd306.cn/tide/support/", "terms": "https://gd306.cn/tide/terms/"},
+  "appFilingNumber": "",
+  "modelPolicy": "unrestricted",
+  "aiServices": [],
+  "reviewed": {"privacy": false, "publicPages": false, "aiContentLabels": false, "providerAuthorization": false},
+  "features": {"accounts": false, "hosted": false, "purchases": false}
+}

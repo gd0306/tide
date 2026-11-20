@@ -1,5 +1,9 @@
 package cn.gd306.tideenglish.network
 
+import cn.gd306.tideenglish.core.ModelProvider
+import cn.gd306.tideenglish.core.ProviderConfiguration
+import cn.gd306.tideenglish.core.ReleaseModelPolicy
+import cn.gd306.tideenglish.core.OPENAI_LIVE_MODEL
 import cn.gd306.tideenglish.core.SourceLink
 import cn.gd306.tideenglish.core.ProviderFailureKind
 import java.io.IOException
@@ -34,16 +38,21 @@ class APIClient private constructor(
     private val readCredential: () -> String?,
     private val client: OkHttpClient = defaultClient(),
     private val baseUrl: HttpUrl = API_BASE_URL,
+    private val policy: ReleaseModelPolicy,
+    private val selection: () -> ProviderConfiguration,
 ) : TeachingClient, LiveSessionProvider {
-    constructor(credentials: CredentialStore) : this(credentials::read)
+    constructor(credentials: CredentialStore, policy: ReleaseModelPolicy, selection: () -> ProviderConfiguration) :
+        this(credentials::read, policy = policy, selection = selection)
 
-    internal constructor(key: String?, client: OkHttpClient, baseUrl: HttpUrl) :
-        this({ key }, client, baseUrl)
+    internal constructor(key: String?, client: OkHttpClient, baseUrl: HttpUrl,
+                         policy: ReleaseModelPolicy = ReleaseModelPolicy.unrestricted,
+                         selection: () -> ProviderConfiguration = { ProviderConfiguration() }) :
+        this({ key }, client, baseUrl, policy, selection)
 
     override suspend fun createLiveSession(request: LiveSessionRequest): LiveSessionConnection {
         val result = post("live/sessions", buildJsonObject {
             put("session", buildJsonObject {
-                put("model", "gpt-live-1"); put("instructions", request.instructions); put("input", request.history)
+                put("model", OPENAI_LIVE_MODEL); put("instructions", request.instructions); put("input", request.history)
                 put("store", false)
                 put("delegation", buildJsonObject { put("type", "client") })
                 put("audio", buildJsonObject { put("output", buildJsonObject { put("voice", "marin") }) })
@@ -57,10 +66,24 @@ class APIClient private constructor(
         return LiveSessionConnection(answer, id)
     }
 
+    private fun authorize(path: String, body: JsonObject) {
+        if (!policy.restricted) return
+        val selected = policy.requireChat(selection())
+        val model = (if (path == "live/sessions") (body["session"] as? JsonObject)?.get("model")
+                     else body["model"]) as? JsonPrimitive
+        val wireModel = model?.takeIf { it.isString }?.content
+        require(selected.provider == ModelProvider.OPENAI &&
+                (if (path == "live/sessions") wireModel == OPENAI_LIVE_MODEL else path == "responses" && wireModel == selected.model) &&
+                policy.permitsWire(ModelProvider.OPENAI, wireModel, baseUrl.toString().trimEnd('/'))) {
+            "This OpenAI model or endpoint is unavailable in this release."
+        }
+    }
+
     suspend fun post(path: String, body: JsonObject): JsonObject {
         if (!VALID_PATH.matches(path) || path.contains("..") || path.startsWith('/')) {
             throw APIException.InvalidResponse
         }
+        authorize(path, body)
         val key = readCredential() ?: throw APIException.MissingKey
         val request = Request.Builder()
             .url(baseUrl.newBuilder().addPathSegments(path).build())
@@ -147,11 +170,12 @@ class APIClient private constructor(
         }
     }
     override suspend fun streamMeaning(instructions: String, input: String, onText: (String) -> Unit): APIResult {
-        val key = readCredential() ?: throw APIException.MissingKey
         val body = buildJsonObject {
             responseBody(instructions, input, null, false).forEach { (key, value) -> put(key, value) }
             put("stream", true)
         }
+        authorize("responses", body)
+        val key = readCredential() ?: throw APIException.MissingKey
         val request = Request.Builder().url(baseUrl.newBuilder().addPathSegments("responses").build())
             .header("Authorization", "Bearer $key").header("Accept", "text/event-stream")
             .post(body.toString().toRequestBody(JSON_MEDIA_TYPE)).build()

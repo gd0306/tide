@@ -48,7 +48,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import cn.gd306.tideenglish.ui.tideStringResource as stringResource
@@ -220,7 +219,6 @@ private fun LanguageDropdown(title: String, subtitle: String, tag: String,
 
 @Composable
 fun AIConsentDialog(onAgree: () -> Unit, onDecline: () -> Unit, configuration: cn.gd306.tideenglish.core.ProviderConfiguration = cn.gd306.tideenglish.core.ProviderConfiguration()) {
-    val uriHandler = LocalUriHandler.current
     Dialog(
         onDismissRequest = {},
         properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false, usePlatformDefaultWidth = false),
@@ -247,11 +245,7 @@ fun AIConsentDialog(onAgree: () -> Unit, onDecline: () -> Unit, configuration: c
                     stringResource(R.string.consent_local_storage_note),
                     color = TideEnglishColors.Secondary,
                 )
-                Text(
-                    stringResource(R.string.consent_privacy_policy_link),
-                    color = TideEnglishColors.Orange,
-                    modifier = Modifier.clickable { uriHandler.openUri("https://tide-english.example/privacy/") }.padding(vertical = 8.dp),
-                )
+                PublicInformationLink(PublicInformationPage.PRIVACY)
                 Text(stringResource(R.string.consent_adult_confirmation), style = MaterialTheme.typography.bodySmall,
                     color = TideEnglishColors.Secondary, modifier = Modifier.testTag("adult-confirmation"))
                 Spacer(Modifier.height(12.dp))

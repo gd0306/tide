@@ -71,13 +71,20 @@ import cn.gd306.tideenglish.core.SessionRecord
 import cn.gd306.tideenglish.core.Speaker
 import cn.gd306.tideenglish.core.UsageSummary
 import cn.gd306.tideenglish.core.ProviderFailureKind
+import cn.gd306.tideenglish.core.CorrectionSource
+import cn.gd306.tideenglish.core.SavedExpression
+import cn.gd306.tideenglish.core.cachedPracticeTranslation
+import cn.gd306.tideenglish.core.matchesPracticeSearch
 import kotlinx.coroutines.launch
 
 @Composable
-fun SettingsScreen(vm: TideEnglishViewModel, onExport: () -> Unit, onImport: () -> Unit, onReviewConsent: () -> Unit,
+internal fun SettingsScreen(vm: TideEnglishViewModel, onExport: () -> Unit, onImport: () -> Unit, onReviewConsent: () -> Unit,
                    onAccount: (() -> Unit)? = null, accountSummary: String? = null,
-                   focusAdvanced: Boolean = false, onDismiss: () -> Unit = {}) {
+                   focusAdvanced: Boolean = false, onDismiss: () -> Unit = {},
+                   onCheckCorrection: (CorrectionSource) -> Unit) {
     TideDialogAppearance()
+    val deletionScope = rememberCoroutineScope()
+    val showPublicInformation = rememberPublicInformationOpener()
     var page by rememberSaveable { mutableStateOf("main") }
     var keyDialog by rememberSaveable { mutableStateOf(false) }
     var deleteAll by rememberSaveable { mutableStateOf(false) }
@@ -97,7 +104,7 @@ fun SettingsScreen(vm: TideEnglishViewModel, onExport: () -> Unit, onImport: () 
     val version = remember(context) { context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty() }
     fun open(url: String) { runCatching { uriHandler.openUri(url) } }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().testTag("settings-container")) {
         val title = when (page) {
             "interests" -> stringResource(R.string.settings_interests_label)
             "data" -> stringResource(R.string.settings_learning_data)
@@ -186,11 +193,11 @@ fun SettingsScreen(vm: TideEnglishViewModel, onExport: () -> Unit, onImport: () 
                     }
                     item {
                         SettingsGroup(stringResource(R.string.settings_section_help_privacy)) {
-                            SettingsRow(stringResource(R.string.common_contact_support), onClick = { open("https://tide-english.example/support/") })
+                            SettingsRow(stringResource(R.string.common_contact_support), onClick = { showPublicInformation(PublicInformationPage.SUPPORT) })
                             SettingsDivider()
-                            SettingsRow(stringResource(R.string.common_privacy_policy), onClick = { open("https://tide-english.example/privacy/") })
+                            SettingsRow(stringResource(R.string.common_privacy_policy), onClick = { showPublicInformation(PublicInformationPage.PRIVACY) })
                             SettingsDivider()
-                            SettingsRow(stringResource(R.string.common_terms_of_use), onClick = { open("https://tide-english.example/terms/") })
+                            SettingsRow(stringResource(R.string.common_terms_of_use), onClick = { showPublicInformation(PublicInformationPage.TERMS) })
                             SettingsDivider()
                             SettingsRow(stringResource(R.string.settings_about), chevron = true,
                                 modifier = Modifier.testTag("settings-about"), onClick = { page = "about" })
@@ -268,35 +275,46 @@ fun SettingsScreen(vm: TideEnglishViewModel, onExport: () -> Unit, onImport: () 
                 enabled = !vm.isRunning, modifier = Modifier.testTag("review-ai-consent")) { Text(stringResource(R.string.settings_review_consent_button)) }
         }, dismissButton = { TideEnglishTextButton(onClick = { permissionDetails = false }) { Text(stringResource(R.string.common_close)) } })
     if (deleteAll) ConfirmDialog(stringResource(R.string.settings_delete_all_confirm_title), stringResource(R.string.settings_delete_all_confirm_message), stringResource(R.string.settings_delete_all_confirm_button), {
-        vm.deleteLearningData(); deleteAll = false
+        deletionScope.launch { vm.deleteLearningData() }; deleteAll = false
     }, { deleteAll = false })
     if (revokeConsent) ConfirmDialog(stringResource(R.string.settings_revoke_consent_confirm_title),
         stringResource(R.string.settings_revoke_consent_confirm_message), stringResource(R.string.settings_revoke_consent_button), {
             vm.updatePreferences(vm.archive.preferences.copy(aiConsentVersion = null)); revokeConsent = false
         }, { revokeConsent = false })
     deleteSession?.let { session -> ConfirmDialog(stringResource(R.string.history_delete_session_confirm_title), session.title, stringResource(R.string.common_delete), {
-        vm.deleteSession(session.id); deleteSession = null
+        deletionScope.launch { vm.deleteSession(session.id) }; deleteSession = null
     }, { deleteSession = null }) }
-    transcript?.let { TranscriptDialog(vm, it, onDismiss = { transcript = null }) }
+    transcript?.let { TranscriptDialog(vm, it, onDismiss = { transcript = null }, onCheckCorrection = onCheckCorrection) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsHistorySheet(vm: TideEnglishViewModel, onDismiss: () -> Unit, onSelect: (SessionRecord) -> Unit, onDelete: (SessionRecord) -> Unit) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val meaning = vm.archive.preferences.meaningLanguage
+    val rehearsalTitle = stringResource(R.string.practice_correction_rehearse)
+    val records = remember(vm.archive, query, rehearsalTitle) {
+        vm.archive.sessions.filter { it.matchesPracticeSearch(query.trim(), meaning, practiceHistoryTitle(it, rehearsalTitle)) }
+            .sortedByDescending { it.startedAt }
+    }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = TideEnglishColors.Cream,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.fillMaxHeight(.9f)) {
+        Column(Modifier.fillMaxHeight(.9f).testTag("settings-history-sheet")) {
             SettingsSheetHeader(stringResource(R.string.history_section_title), onDismiss)
             LazyColumn(Modifier.weight(1f).testTag("settings-history-list"), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                if (vm.archive.sessions.isEmpty()) item {
-                    Text(stringResource(R.string.history_empty), style = MaterialTheme.typography.bodyLarge, color = TideEnglishColors.Secondary,
+                item {
+                    TideEnglishTextField(query, { query = it.take(200) }, Modifier.fillMaxWidth().testTag("history-search"),
+                        label = { Text(stringResource(R.string.practice_history_search)) }, singleLine = true)
+                }
+                if (records.isEmpty()) item {
+                    Text(stringResource(if (query.isBlank()) R.string.history_empty else R.string.practice_no_matches), style = MaterialTheme.typography.bodyLarge, color = TideEnglishColors.Secondary,
                         modifier = Modifier.padding(16.dp))
                 }
-                items(vm.archive.sessions.sortedByDescending { it.startedAt }, key = { it.id }) { session ->
+                items(records, key = { it.id }) { session ->
                     SettingsGroup {
                         Column(Modifier.fillMaxWidth().clickable { onSelect(session) }.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Text(session.title, style = MaterialTheme.typography.titleMedium)
+                            Text(practiceHistoryTitle(session, rehearsalTitle), style = MaterialTheme.typography.titleMedium)
                             Text("${LanguageRegistry.get(session.languageID)?.name ?: session.languageID} · ${formatDate(session.startedAt)}",
                                 color = TideEnglishColors.Secondary, style = MaterialTheme.typography.bodySmall)
                         }
@@ -308,6 +326,10 @@ private fun SettingsHistorySheet(vm: TideEnglishViewModel, onDismiss: () -> Unit
         }
     }
 }
+
+private fun practiceHistoryTitle(record: SessionRecord, rehearsalTitle: String): String =
+    if (record.practiceKind == "correction" && record.themeID == "correction" && record.title == "Say it again") rehearsalTitle
+    else record.title
 
 @Composable
 private fun ConfirmDialog(title: String, message: String, confirm: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
@@ -321,65 +343,96 @@ private fun ConfirmDialog(title: String, message: String, confirm: String, onCon
 }
 
 @Composable
-fun TranscriptDialog(vm: TideEnglishViewModel, session: SessionRecord, onDismiss: () -> Unit) {
+internal fun TranscriptDialog(vm: TideEnglishViewModel, session: SessionRecord, onDismiss: () -> Unit,
+    onCheckCorrection: (CorrectionSource) -> Unit) {
     var correcting by remember { mutableStateOf<Passage?>(null) }
+    val scope = rememberCoroutineScope()
+    val rehearsalTitle = stringResource(R.string.practice_correction_rehearse)
     val liveSession = vm.archive.sessions.firstOrNull { it.id == session.id }
         ?: vm.session?.takeIf { it.id == session.id }
-        ?: session
+    if (liveSession == null) {
+        androidx.compose.runtime.LaunchedEffect(session.id) { onDismiss() }
+        return
+    }
+    val meaning = vm.archive.preferences.meaningLanguage
+    val sourceLanguageSelected = liveSession.languageID == vm.language.id
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(28.dp), color = TideEnglishColors.Surface) {
-            LazyColumn(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                item {
-                    Text(liveSession.title, style = MaterialTheme.typography.headlineMedium)
-                    Text("${formatDate(liveSession.startedAt)} · ${pluralStringResource(R.plurals.history_passages_count, liveSession.passages.size, liveSession.passages.size)}", color = TideEnglishColors.Secondary)
-                }
-                items(liveSession.passages, key = { it.id }) { passage ->
-                    Column(
-                        Modifier.fillMaxWidth().background(
-                            if (passage.speaker == Speaker.user) TideEnglishColors.SurfaceBright else TideEnglishColors.Peach,
-                            RoundedCornerShape(18.dp),
-                        ).padding(15.dp),
-                        verticalArrangement = Arrangement.spacedBy(7.dp),
-                    ) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(if (passage.speaker == Speaker.user) R.string.history_speaker_you else R.string.history_speaker_tideenglish),
-                                style = MaterialTheme.typography.labelSmall, color = TideEnglishColors.Secondary, modifier = Modifier.weight(1f))
-                            if (passage.speaker == Speaker.assistant && passage.text.isNotBlank()) {
-                                ReportUtteranceAction(onClick = {
-                                    vm.reportUtterance(liveSession.id, passage.id)
-                                    onDismiss()
-                                }, modifier = Modifier.testTag("report-history-${passage.id}"))
-                            }
+            Column(Modifier.padding(vertical = 12.dp).testTag("history-transcript")) {
+                SettingsSheetHeader(practiceHistoryTitle(liveSession, rehearsalTitle), onDismiss, R.string.common_close)
+                LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false).testTag("history-transcript-list"),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    item {
+                        Text("${formatDate(liveSession.startedAt)} · ${pluralStringResource(R.plurals.history_passages_count, liveSession.passages.size, liveSession.passages.size)}", color = TideEnglishColors.Secondary)
+                        if (!sourceLanguageSelected && liveSession.endedAt != null && liveSession.passages.any { it.speaker == Speaker.user }) {
+                            Text(stringResource(R.string.practice_correction_source_language), color = TideEnglishColors.Secondary,
+                                modifier = Modifier.padding(top = 8.dp))
                         }
-                        SelectionContainer { Text(passage.text) }
-                        if (liveSession.languageID == "zh") PinyinHelp(passage.text)
-                        if (passage.speaker == Speaker.user && !vm.isRunning) TideEnglishTextButton(onClick = { correcting = passage }) { Text(stringResource(R.string.history_edit_passage_button)) }
+                    }
+                    items(liveSession.passages, key = { it.id }) { passage ->
+                        Column(
+                            Modifier.fillMaxWidth().background(
+                                if (passage.speaker == Speaker.user) TideEnglishColors.SurfaceBright else TideEnglishColors.Peach,
+                                RoundedCornerShape(18.dp),
+                            ).padding(15.dp),
+                            verticalArrangement = Arrangement.spacedBy(7.dp),
+                        ) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(stringResource(if (passage.speaker == Speaker.user) R.string.history_speaker_you else R.string.history_speaker_tideenglish),
+                                    style = MaterialTheme.typography.labelSmall, color = TideEnglishColors.Secondary, modifier = Modifier.weight(1f))
+                                if (passage.speaker == Speaker.assistant && passage.text.isNotBlank()) {
+                                    ReportUtteranceAction(onClick = {
+                                        vm.reportUtterance(liveSession.id, passage.id)
+                                        onDismiss()
+                                    }, modifier = Modifier.testTag("report-history-${passage.id}"))
+                                }
+                            }
+                            SelectionContainer { Text(passage.text) }
+                            if (liveSession.languageID == "zh") PinyinHelp(passage.text)
+                            val translation = liveSession.cachedPracticeTranslation(passage, meaning)
+                            translation?.let {
+                                SelectionContainer { Text(it, color = TideEnglishColors.Secondary, modifier = Modifier.testTag("history-cached-translation")) }
+                            }
+                            if (liveSession.endedAt != null && passage.text.isNotBlank()) {
+                                SaveExpressionAction(vm, SavedExpression(languageID = liveSession.languageID, text = passage.text,
+                                    meaning = translation.orEmpty(), context = passage.text, sourceSessionID = liveSession.id,
+                                    sourcePassageID = passage.id, revisionKey = passage.revisionKey))
+                                if (passage.speaker == Speaker.user) {
+                                    PracticeButton(R.string.practice_check_correction, onClick = {
+                                        onCheckCorrection(CorrectionSource(liveSession.id, passage.id, passage.revisionKey,
+                                            passage.text, liveSession.languageID))
+                                    }, tag = "check-correction-${passage.id}", enabled = sourceLanguageSelected && !vm.isRunning)
+                                }
+                            }
+                            if (passage.speaker == Speaker.user) PracticeButton(R.string.history_edit_passage_button,
+                                onClick = { correcting = passage }, tag = "edit-history-${passage.id}", enabled = !vm.isRunning)
+                        }
+                    }
+                    liveSession.topics.flatMap { it.sources }.filter { it.safeUrl() != null }.takeIf { it.isNotEmpty() }?.let { sources ->
+                        item { Text(stringResource(R.string.history_saved_sources), fontWeight = FontWeight.SemiBold) }
+                        items(sources) { source ->
+                            val uriHandler = LocalUriHandler.current
+                            Text("↗ ${source.title}", color = TideEnglishColors.Orange, modifier = Modifier.clickable { source.safeUrl()?.let(uriHandler::openUri) }.padding(vertical = 6.dp))
+                        }
                     }
                 }
-                liveSession.topics.flatMap { it.sources }.filter { it.safeUrl() != null }.takeIf { it.isNotEmpty() }?.let { sources ->
-                    item { Text(stringResource(R.string.history_saved_sources), fontWeight = FontWeight.SemiBold) }
-                    items(sources) { source ->
-                        val uriHandler = LocalUriHandler.current
-                        Text("↗ ${source.title}", color = TideEnglishColors.Orange, modifier = Modifier.clickable { source.safeUrl()?.let(uriHandler::openUri) }.padding(vertical = 6.dp))
-                    }
-                }
-                item { TideEnglishTextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.common_close)) } }
             }
         }
     }
-    correcting?.let { passage -> CorrectionDialog(passage, onSave = {
-        vm.correctPassage(liveSession.id, passage.id, it); correcting = null
+    correcting?.let { passage -> CorrectionDialog(passage, enabled = !vm.isRunning, onSave = { text ->
+        scope.launch { vm.correctPassage(liveSession.id, passage.id, passage.revisionKey, text); correcting = null }
     }, onDismiss = { correcting = null }) }
 }
 
 @Composable
-private fun CorrectionDialog(passage: Passage, onSave: (String) -> Unit, onDismiss: () -> Unit) {
+private fun CorrectionDialog(passage: Passage, enabled: Boolean, onSave: (String) -> Unit, onDismiss: () -> Unit) {
     var text by rememberSaveable(passage.id) { mutableStateOf(passage.text) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.history_correction_dialog_title)) },
         text = { TideEnglishTextField(text, { text = it.take(10_000) }, minLines = 3, maxLines = 9) },
-        confirmButton = { Button(onClick = { onSave(text.trim()) }, enabled = text.isNotBlank()) { Text(stringResource(R.string.common_save)) } },
+        confirmButton = { Button(onClick = { onSave(text.trim()) }, enabled = enabled && text.isNotBlank(),
+            modifier = Modifier.heightIn(min = 48.dp).testTag("save-history-edit")) { Text(stringResource(R.string.common_save)) } },
         dismissButton = { TideEnglishTextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) } },
     )
 }

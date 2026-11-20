@@ -11,7 +11,6 @@ import cn.gd306.tideenglish.core.*
 import cn.gd306.tideenglish.network.*
 import java.util.UUID
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
@@ -114,7 +113,7 @@ internal fun prepareImportedArchive(data: String, importedAt: Double = nowSecond
 
 class TideEnglishViewModel(application: Application) : AndroidViewModel(application) {
     // Keep intent, not an Activity-capturing callback, while the learner reviews consent.
-    var pendingCloudAction: CloudAction? = null
+    internal var pendingCloudAction: CloudAction? = null
     var archive by mutableStateOf(Archive()); private set
     var loadingHistory by mutableStateOf(true); private set
     var session by mutableStateOf<SessionRecord?>(null); private set
@@ -201,17 +200,18 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val repository = LearningRepository(application)
+    val modelPolicy = ReleaseModelPolicy.fromSource(readPublicInformation(application), BuildConfig.DEBUG)
     private val modelStore = ProviderConfigurationStore(application)
     var modelConfiguration by mutableStateOf(modelStore.read()); private set
     val supportsCurrentTopic get() = modelConfiguration.provider in listOf(ModelProvider.OPENAI, ModelProvider.GLM)
     private val providerConsent = application.getSharedPreferences("tide_provider_consent", android.content.Context.MODE_PRIVATE)
     private val credentials get() = CredentialStore(getApplication(), modelConfiguration)
-    private val openAI = APIClient(CredentialStore(application))
-    private val api = ProviderTeachingClient({ modelConfiguration }, { configuration -> CredentialStore(application, configuration).read() })
+    private val openAI = APIClient(CredentialStore(application), modelPolicy) { modelConfiguration }
+    private val api = ProviderTeachingClient({ modelConfiguration }, { configuration -> CredentialStore(application, configuration).read() }, policy = modelPolicy)
     private val transport = LiveTransport(application, viewModelScope)
     private val localVoice = LocalVoiceTransport(application, viewModelScope, api)
     private val nativeVoice = NativeProviderVoiceTransport(application, viewModelScope, { modelConfiguration },
-        { configuration -> CredentialStore(application, configuration).read() })
+        { configuration -> CredentialStore(application, configuration).read() }, policy = modelPolicy)
     private var alternativeVoice: String? = null
     private var nativeFallback = false
     private val providerStore = ConversationProviderStore(application)
@@ -267,9 +267,24 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     fun submitReport(report: AIReportSubmission) = reports.submit(report)
     fun dismissReport() = reports.dismiss()
 
-    private data class SaveRequest(val snapshot: LearningSnapshot, val completion: CompletableDeferred<Unit>? = null)
-    private val writes = Channel<SaveRequest>(Channel.UNLIMITED)
-    private var storageReady = false
+    internal var pendingPractice by mutableStateOf<PracticeIntent?>(null); private set
+    internal var practiceNeedsConfirmation by mutableStateOf(false); private set
+    internal var waitingForPracticeKey by mutableStateOf(false); private set
+    private var offlinePracticeFixture: (suspend (CorrectionSource) -> PracticeCorrectionResult)? = null
+    private var correctionJob: Job? = null
+    private var correctionAttempt: CorrectionAttempt? = null
+    internal var correctionState by mutableStateOf<CorrectionState?>(null); private set
+    internal val canStartPractice get() = storageReady && !isRunning && !hasContinuation
+    internal val practiceNeedsModelSetup get() = conversationProvider == ConversationProvider.PERSONAL_KEY &&
+        (!hasKey || runCatching { modelPolicy.requireChat(modelConfiguration) }.isFailure)
+
+    private var importing = false
+    private val writes = LearningWriteQueue(viewModelScope, ::persistenceSnapshot,
+        { archive = it.archive; finalAssessmentTickets = it.finalAssessments }, { isRunning },
+        { snapshot -> withContext(Dispatchers.IO) { repository.save(snapshot) } }, repository::save,
+        { presentError(localizedContext().getString(R.string.error_save_progress_failed)) })
+    internal var storageReady by mutableStateOf(false); private set
+    internal var canRecoverOriginal by mutableStateOf(false); private set
     private var finalAssessmentTickets: List<FinalAssessmentTicket> = emptyList()
     private val recoveredAssessmentIDs = mutableSetOf<String>()
     private val hostedFinalAssessmentJobs = mutableMapOf<String, Job>()
@@ -305,59 +320,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
 
     init {
         guests?.let { controller -> viewModelScope.launch { controller.state.collect { guestState = it } } }
-        viewModelScope.launch {
-            try {
-                val loaded = withContext(Dispatchers.IO) { repository.load() to runCatching { credentials.hasKey }.getOrDefault(false) }
-                archive = loaded.first.archive
-                val consentScope = runCatching { ProviderConsentScope.key(modelConfiguration) }.getOrNull()
-                if (!providerConsent.getBoolean("migrated", false)) {
-                    val migration = providerConsent.edit().putBoolean("migrated", true)
-                    if (archive.preferences.aiConsentVersion == 1 && ProviderConsentScope.canMigrateLegacy(modelConfiguration))
-                        migration.putString("accepted", consentScope)
-                    check(migration.commit())
-                }
-                if (consentScope == null || providerConsent.getString("accepted", null) != consentScope)
-                    archive = archive.copy(preferences = archive.preferences.copy(aiConsentVersion = null))
-                val providers = providerStore.read(if (loaded.second) ConversationProvider.PERSONAL_KEY else ConversationProvider.HOSTED_MINUTES)
-                hostedSessionIDs = providers.hostedIDs
-                pendingHostedOwnerID = providers.pendingOwnerID
-                accountChangeBlocked = providers.pendingOwnerID != null
-                guests?.recoverAcknowledgedOwnerAtStartup(pendingHostedOwnerID,
-                    clear = { owner -> clearAcknowledgedGuestMarker(owner) },
-                    onFailure = { presentError(localizedContext().getString(R.string.error_guest_secure_storage_unavailable)) })
-                conversationProvider = if (hostedConfiguration == null) ConversationProvider.PERSONAL_KEY else providers.selection
-                finalAssessmentTickets = ConversationProviderPolicy.recoveryTickets(loaded.first.finalAssessments, hostedSessionIDs)
-                hasKey = loaded.second
-                storageReady = true
-                recoverFinalAssessments()
-                refreshHostedReadiness()
-                if (accountChangeBlocked) reconcileHostedSessions()
-            } catch (_: CancellationException) { }
-            catch (_: Exception) {
-                presentError(localizedContext().getString(R.string.error_local_history_unavailable))
-            } finally { loadingHistory = false }
-        }
-        viewModelScope.launch {
-            for (first in writes) {
-                var latest = first
-                val completions = mutableListOf<CompletableDeferred<Unit>>()
-                first.completion?.let(completions::add)
-                // Coalesce transcript deltas while preserving every requested durability barrier.
-                while (true) {
-                    val next = writes.tryReceive().getOrNull() ?: break
-                    latest = next
-                    next.completion?.let(completions::add)
-                }
-                try {
-                    withContext(Dispatchers.IO) { repository.save(latest.snapshot) }
-                    completions.forEach { it.complete(Unit) }
-                } catch (error: Exception) {
-                    completions.forEach { it.completeExceptionally(error) }
-                    if (error is CancellationException) throw error
-                    presentError(localizedContext().getString(R.string.error_save_progress_failed))
-                }
-            }
-        }
+        openHistory()
         transport.onEvent = { event ->
             try { handle(event) }
             catch (_: IllegalArgumentException) { notice = localizedContext().getString(R.string.notice_invalid_voice_update) }
@@ -417,7 +380,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun recoverFinalAssessments() {
-        if (!storageReady || !hasKey || archive.preferences.aiConsentVersion != 1) return
+        if (offlinePracticeFixture != null || !storageReady || !hasKey || archive.preferences.aiConsentVersion != 1) return
         val remaining = FinalAssessmentRecovery.MAX_RECOVERED_PER_LAUNCH - recoveredAssessmentIDs.size
         if (remaining <= 0) return
         FinalAssessmentRecovery.recover(archive.sessions, finalAssessmentTickets, nowSeconds())
@@ -436,16 +399,15 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         finalAssessmentTickets.toList(),
     )
     private fun persist() {
-        if (storageReady) writes.trySend(SaveRequest(persistenceSnapshot()))
+        if (storageReady) writes.persist(persistenceSnapshot())
     }
     private suspend fun persistAndWait() {
         check(storageReady)
-        val completion = CompletableDeferred<Unit>()
-        writes.send(SaveRequest(persistenceSnapshot(), completion))
-        completion.await()
+        writes.persistAndWait(persistenceSnapshot())
     }
     private fun save(s: SessionRecord) {
-        finalAssessmentTickets = ConversationProviderPolicy.enqueueRecovery(s, finalAssessmentTickets, hostedSessionIDs)
+        if (offlinePracticeFixture == null)
+            finalAssessmentTickets = ConversationProviderPolicy.enqueueRecovery(s, finalAssessmentTickets, hostedSessionIDs)
         archive = archive.copy(sessions = (archive.sessions.filterNot { it.id == s.id } + clone(s)).toMutableList())
         persist()
     }
@@ -486,12 +448,14 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     private fun localizeAuthored(message: String): String = ProviderVoiceMessages.localize(message,
         getApplication<Application>().getSharedPreferences("tide.presentation.v1", android.content.Context.MODE_PRIVATE)
             .getString("language", "ENGLISH") == "CHINESE")
+    internal fun hasScopedConsent(): Boolean = archive.preferences.aiConsentVersion == 1 &&
+        runCatching { ProviderConsentScope.key(modelConfiguration) }.getOrNull()?.let {
+            it == providerConsent.getString("accepted", null)
+        } == true
+
     private fun cloudReady(): Boolean {
         if (!storageReady) { presentError(localizedContext().getString(R.string.error_resolve_local_history_first)); return false }
-        if (archive.preferences.aiConsentVersion != 1) {
-            presentError(localizedContext().getString(R.string.error_accept_ai_consent)); return false
-        }
-        if (runCatching { ProviderConsentScope.key(modelConfiguration) }.getOrNull() != providerConsent.getString("accepted", null)) {
+        if (!hasScopedConsent()) {
             presentError(localizedContext().getString(R.string.error_accept_ai_consent)); return false
         }
         val currentHosted = session?.id in hostedSessionIDs
@@ -503,7 +467,11 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     /** Called by the minutes/account UI after an explicit provider choice. No failure changes it. */
     fun selectConversationProvider(provider: ConversationProvider) {
         if (isRunning || !storageReady) return
-        if (provider != conversationProvider) clearContinuation()
+        if (provider != conversationProvider) {
+            clearContinuation()
+            cancelPractice()
+            dismissCorrection()
+        }
         conversationProvider = provider
         viewModelScope.launch {
             try { providerStore.select(provider) }
@@ -634,6 +602,13 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     private suspend fun teaching(localID: String?, purpose: HelperPurpose, logicalID: String,
         instructions: String, input: String, schema: JsonObject? = null, search: Boolean = false, onText: ((String) -> Unit)? = null): APIResult {
         if (archive.preferences.aiConsentVersion != 1) throw HostedFailure.Unavailable
+        if (offlinePracticeFixture != null) {
+            return when (purpose) {
+                HelperPurpose.MEANING -> APIResult("Thank you.", emptyList(), APIUsage(0, 0))
+                HelperPurpose.TYPED_REPLY -> APIResult("Merci !", emptyList(), APIUsage(0, 0))
+                else -> throw CancellationException("Practice fixture has no provider")
+            }
+        }
         if (localID != null && localID in hostedSessionIDs) {
             return hostedBindings.respond(localID, purpose, logicalID, instructions, input, schema, search, onText)
         }
@@ -749,10 +724,12 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     fun updateModelConfiguration(configuration: ProviderConfiguration): Boolean {
         if (isRunning || !storageReady) return false
         return try {
-            val valid = configuration.validated()
+            val valid = modelPolicy.requireChat(configuration)
             if (valid == modelConfiguration) return true
             // Revoke durably before changing recipient, including across process death.
             check(providerConsent.edit().remove("accepted").putBoolean("migrated", true).commit())
+            dismissCorrection()
+            if (!waitingForPracticeKey) cancelPractice()
             modelStore.save(valid)
             generation++; actionJob?.cancel(); assessmentJob?.cancel(); clearLookup(); meanings.reset()
             finalAssessments.cancelAll(); recoveredAssessmentIDs.clear()
@@ -770,11 +747,15 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     }
     fun saveKey(key: String, useAfterSave: Boolean = true) {
         if (isRunning) return
+        dismissCorrection()
+        if (!waitingForPracticeKey) cancelPractice()
         try { credentials.save(key); hasKey = credentials.hasKey; providerIssue = null; if (useAfterSave) selectConversationProvider(ConversationProvider.PERSONAL_KEY); recoverFinalAssessments(); notice = localizedContext().getString(R.string.notice_key_saved) }
         catch (e: Exception) { presentError(e, R.string.error_key_save_failed) }
     }
     fun deleteKey() {
         if (isRunning) return
+        dismissCorrection()
+        cancelPractice()
         try { credentials.delete(); hasKey = false; providerIssue = null }
         catch (e: Exception) { presentError(e, R.string.error_key_delete_failed) }
         finally { hasKey = credentials.hasKey }
@@ -783,6 +764,11 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         if (isRunning || !storageReady) return
         if (LanguageRegistry.get(preferences.learningLanguageID) == null || preferences.meaningLanguage !in MeaningLanguages.all || preferences.sessionMinutes !in 1..60) return
         val languageChanged = preferences.learningLanguageID != language.id
+        val revoked = archive.preferences.aiConsentVersion == 1 && preferences.aiConsentVersion != 1
+        if (languageChanged || revoked || preferences.meaningLanguage != archive.preferences.meaningLanguage) {
+            dismissCorrection()
+            cancelPractice()
+        }
         try {
             val editor = providerConsent.edit().putBoolean("migrated", true)
             if (preferences.aiConsentVersion == 1) editor.putString("accepted", ProviderConsentScope.key(modelConfiguration))
@@ -821,6 +807,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     }
     fun toggleMute() { if (state == "active" && voiceSession) {
         isMuted = !isMuted
+        if (offlinePracticeFixture != null) return
         when (alternativeVoice) { "local" -> localVoice.setMuted(isMuted); "native" -> nativeVoice.setMuted(isMuted); else -> transport.mute(isMuted) }
     } }
     fun help() {
@@ -855,16 +842,199 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    private fun newSession(voice: Boolean, id: String = UUID.randomUUID().toString()) {
+    internal fun selectPractice(intent: PracticeIntent): Boolean {
+        if (!canStartPractice || !inForeground || intent.theme(language, archive) == null) return false
+        cancelPractice()
+        pendingPractice = intent
+        return true
+    }
+
+    internal fun openPracticeKeySetup() {
+        if (pendingPractice != null) waitingForPracticeKey = true
+    }
+
+    internal fun finishPracticeKeySetup(saved: Boolean) {
+        if (!waitingForPracticeKey) return
+        waitingForPracticeKey = false
+        practiceNeedsConfirmation = saved && !practiceNeedsModelSetup &&
+            pendingPractice?.theme(language, archive) != null && canStartPractice
+        if (!practiceNeedsConfirmation) cancelPractice()
+    }
+
+    internal fun confirmPractice(): Boolean {
+        practiceNeedsConfirmation = false
+        if (canStartPractice && pendingPractice?.theme(language, archive) != null) return true
+        cancelPractice()
+        return false
+    }
+
+    internal fun cancelPractice() {
+        pendingPractice = null
+        waitingForPracticeKey = false
+        practiceNeedsConfirmation = false
+        if (pendingCloudAction == CloudAction.StartPractice) pendingCloudAction = null
+    }
+
+    internal fun installOfflinePracticeFixture(respond: suspend (CorrectionSource) -> PracticeCorrectionResult) {
+        check(BuildConfig.PRACTICE_FIXTURES_ALLOWED && getApplication<Application>().packageName.endsWith(".uitest"))
+        finalAssessments.cancelAll()
+        offlinePracticeFixture = respond
+    }
+
+    private data class CorrectionAttempt(
+        val source: CorrectionSource,
+        val configuration: ProviderConfiguration,
+        val meaningLanguage: String,
+    )
+
+    private fun correctionArchive(attempt: CorrectionAttempt, current: Archive = archive): Archive? =
+        current.takeIf {
+            correctionAttempt === attempt && storageReady && inForeground && !isRunning && hasScopedConsent() &&
+                hasKey && conversationProvider == ConversationProvider.PERSONAL_KEY &&
+                modelConfiguration == attempt.configuration && it.preferences.meaningLanguage == attempt.meaningLanguage
+        }
+
+    private fun invalidatePracticeSelection() {
+        if (correctionState?.source?.let { it.problem(archive) != null } == true) dismissCorrection()
+        val action = pendingCloudAction as? CloudAction.RequestCorrection
+        if (action?.source?.let { it.problem(archive) != null } == true) pendingCloudAction = null
+        if (pendingPractice?.theme(language, archive) == null) cancelPractice()
+    }
+
+    internal fun dismissCorrection() {
+        correctionAttempt = null
+        correctionJob?.cancel(); correctionJob = null
+        correctionState = null
+        if (pendingCloudAction is CloudAction.RequestCorrection) pendingCloudAction = null
+    }
+
+    internal fun requestCorrection(source: CorrectionSource) {
+        dismissCorrection()
+        if (!inForeground || !storageReady || isRunning) return
+        val module = LanguageRegistry.get(source.languageID) ?: return
+        val problem = source.problem(archive) ?: when {
+            conversationProvider != ConversationProvider.PERSONAL_KEY -> CorrectionProblem.PERSONAL_KEY
+            !hasScopedConsent() -> return
+            !hasKey -> CorrectionProblem.KEY_REQUIRED
+            else -> null
+        }
+        if (problem != null) {
+            correctionState = CorrectionState.Failure(source, problem)
+            return
+        }
+        val attempt = CorrectionAttempt(source, modelConfiguration, archive.preferences.meaningLanguage)
+        correctionAttempt = attempt
+        correctionState = CorrectionState.Checking(source)
+        correctionJob = viewModelScope.launch {
+            try {
+                val result = requestPracticeCorrection(source, { correctionArchive(attempt) }) {
+                    val fixture = offlinePracticeFixture
+                    if (fixture != null) fixture(source)
+                    else {
+                        val schema = buildJsonObject {
+                            put("type", "object")
+                            put("additionalProperties", false)
+                            put("required", JsonArray(listOf("hasCorrection", "corrected", "explanation").map(::JsonPrimitive)))
+                            put("properties", buildJsonObject {
+                                put("hasCorrection", buildJsonObject { put("type", "boolean") })
+                                put("corrected", buildJsonObject { put("type", "string") })
+                                put("explanation", buildJsonObject { put("type", "string") })
+                            })
+                        }
+                        val response = teaching(null, HelperPurpose.LOOKUP, UUID.randomUUID().toString(),
+                            PracticePrompts.correction(module.name, attempt.meaningLanguage), source.original, schema)
+                        try { json.decodeFromString<PracticeCorrectionResult>(response.text) }
+                        catch (_: kotlinx.serialization.SerializationException) { throw CorrectionFailure(CorrectionProblem.RESPONSE) }
+                    }
+                }
+                correctionState = CorrectionState.Answer(source, result)
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) {
+                if (correctionAttempt !== attempt) return@launch
+                val reason = (error as? CorrectionFailure)?.problem
+                    ?: if (errorMessageRes(error) == R.string.error_incomplete_response) CorrectionProblem.RESPONSE else CorrectionProblem.REQUEST
+                correctionState = CorrectionState.Failure(source, reason)
+            }
+        }
+    }
+
+    internal fun saveCorrection() {
+        val state = correctionState as? CorrectionState.Answer ?: return
+        val correction = state.correction ?: return
+        val attempt = correctionAttempt ?: return
+        if (state.saving || state.saved || correctionArchive(attempt) == null || attempt.source.problem(archive) != null) return
+        correctionState = state.copy(saving = true, storageFailed = false)
+        viewModelScope.launch {
+            try {
+                writes.mutate(mutation = { current ->
+                    val matching = correctionArchive(attempt, current.archive) ?: throw CorrectionFailure(CorrectionProblem.STALE)
+                    attempt.source.problem(matching)?.let { throw CorrectionFailure(it) }
+                    current.copy(archive = matching.editPractice {
+                        if (!it.saveCorrection(correction, matching.sessions)) throw CorrectionFailure(CorrectionProblem.STALE)
+                    })
+                }, onCommit = {
+                    if (correctionAttempt === attempt) correctionState = state.copy(saved = true, storageFailed = false)
+                })
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) {
+                if (correctionAttempt === attempt) {
+                    correctionState = if (error is CorrectionFailure) CorrectionState.Failure(state.source, error.problem)
+                    else state.copy(storageFailed = true)
+                }
+            }
+        }
+    }
+
+    internal suspend fun saveExpression(expression: SavedExpression): ExpressionSave {
+        if (!storageReady || isRunning) return ExpressionSave.FAILED
+        var outcome = ExpressionSave.FAILED
+        return try {
+            writes.mutate(mutation = { current ->
+                current.copy(archive = current.archive.editPractice {
+                    val count = it.expressions.size
+                    it.saveExpression(expression)
+                    outcome = if (it.expressions.size > count) ExpressionSave.SAVED else ExpressionSave.DUPLICATE
+                })
+            }, onCommit = {})
+            outcome
+        } catch (error: CancellationException) { throw error }
+        catch (_: ArchiveError) { ExpressionSave.INVALID }
+        catch (_: Exception) { ExpressionSave.FAILED }
+    }
+
+    internal suspend fun deletePracticeItem(id: String, correction: Boolean) {
+        if (!storageReady || isRunning) return
+        try {
+            writes.mutate(mutation = { current ->
+                current.copy(archive = current.archive.editPractice {
+                    if (correction) it.deleteCorrection(id) else it.deleteExpression(id)
+                })
+            }, onCommit = { invalidatePracticeSelection() })
+        } catch (error: CancellationException) { throw error }
+        catch (_: Exception) { presentError(localizedContext().getString(R.string.error_save_progress_failed)) }
+    }
+
+    private fun newSession(voice: Boolean, practiceKind: String? = null, continuing: Boolean = false) {
+        if (practiceKind == null && !continuing && session?.practiceKind != null &&
+            selectedTheme?.id == session?.themeID && selectedTheme?.id != "current") selectedTheme = null
+        dismissCorrection()
+        cancelPractice()
         generation++; resetJob?.cancel(); assessmentJob?.cancel(); actionJob?.cancel(); clearLookup(); working = false; meanings.reset()
         dismissError(); notice = null; isMuted = false
         voiceSession = voice
-        val record = SessionRecord(id = id, languageID = language.id, themeID = selectedTheme?.id, title = selectedTheme?.title ?: language.defaultTitle)
+        val record = SessionRecord(languageID = language.id, themeID = selectedTheme?.id,
+            title = selectedTheme?.title ?: language.defaultTitle, practiceKind = practiceKind)
         topicResult?.takeIf { it.languageID == language.id && selectedTheme?.id == "current" }?.let { record.topics += it }
         session = record; save(record)
     }
-    fun start() {
-        if (!inForeground || isRunning || !cloudReady()) return
+    fun start(practiceRequested: Boolean = false) {
+        if (!inForeground || isRunning) return
+        val intent = if (practiceRequested) pendingPractice?.takeUnless { waitingForPracticeKey || practiceNeedsConfirmation } ?: return else null
+        if (!cloudReady()) return
+        val practiceTheme = if (intent != null) {
+            if (hasContinuation) return
+            intent.theme(language, archive) ?: run { cancelPractice(); return }
+        } else null
         if (hasContinuation && !continuationReady) { reconcileHostedSessions(); refreshHostedReadiness(); return }
         val continuing = continuationSession
         val continuingOwner = continuationOwnerID
@@ -879,9 +1049,23 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
             } else presentError(localizedContext().getString(R.string.error_missing_key), true)
             return
         }
-        newSession(true); state = "connecting"
+        if (practiceTheme != null) {
+            selectedTheme = practiceTheme
+            topicResult = null
+        }
+        newSession(true, intent?.kind ?: continuing?.practiceKind, continuing = continuing != null)
+        state = "connecting"
         nativeFallback = false
-        val id = session!!.id
+        val record = checkNotNull(session)
+        val id = record.id
+        val requestedMilliseconds = practiceSessionMinutes(record.practiceKind, archive.preferences.sessionMinutes) * 60_000L
+        if (offlinePracticeFixture != null) {
+            state = "active"
+            activity = ConversationActivity(activityNow())
+            conversationPace = ConversationPace()
+            startDurationChecks()
+            return
+        }
         try {
             // Start while visible and after microphone consent, before Android 15 audio focus.
             VoiceConversationService.start(getApplication(), id) { end("Ended by you") }
@@ -921,7 +1105,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
                     val hosted = hostedClient(owner.accountID)
                     val balance = hostedBalance(owner)
                     if (!balance.canStartConversation || !hosted.available()) throw HostedFailure.Unavailable
-                    freeBoundaryOwnerID = if (balance.availableMilliseconds in 1 until archive.preferences.sessionMinutes * 60_000L &&
+                    freeBoundaryOwnerID = if (balance.availableMilliseconds in 1 until requestedMilliseconds &&
                         balance.paid?.available == true) owner.accountID else null
                     if (freeBoundaryOwnerID != null) notice = localizedContext().getString(R.string.notice_free_minutes_first)
                     // Commit provider provenance and the unresolved-owner marker before making a paid create.
@@ -930,7 +1114,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
                     withContext(NonCancellable) { providerStore.markHosted(id, owner.accountID) }
                     object : LiveSessionProvider {
                         override suspend fun createLiveSession(request: LiveSessionRequest): LiveSessionConnection {
-                            val result = hosted.createLiveSession(request.copy(requestedMilliseconds = archive.preferences.sessionMinutes * 60_000L))
+                            val result = hosted.createLiveSession(request.copy(requestedMilliseconds = requestedMilliseconds))
                             val lease = result.lease as? HostedAPIClient.HostedLease ?: throw HostedFailure.InvalidResponse
                             withContext(NonCancellable + Dispatchers.Main.immediate) {
                                 if (lease.paid) freeBoundaryOwnerID = null
@@ -961,12 +1145,14 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         delegations.values.toList().forEach { it.cancel() }; delegations.clear(); working = false
         updateSession { it.endReason = reason }
         if (alternativeVoice != null) { localVoice.close(); nativeVoice.close(); finish(false); return }
-        if (!voiceSession || connecting) { finish(false); return }
+        if (!voiceSession || connecting || offlinePracticeFixture != null) { finish(false); return }
         transport.close()
         closeJob = viewModelScope.launch { delay(5000); if (state == "closing") finish(false) }
     }
     fun background() {
         inForeground = false
+        dismissCorrection()
+        cancelPractice()
         if (isRunning && alternativeVoice == "local") { end("App moved to background"); return }
         // Screen state is not learner inactivity. The foreground service owns this call.
         if (isRunning && voiceSession && VoiceConversationService.holds(session?.id)) return
@@ -983,9 +1169,12 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         connectionJob?.cancel(); durationJob?.cancel(); closeJob?.cancel(); assessmentJob?.cancel()
         actionJob?.cancel(); clearLookup(); languageCheckJob?.cancel()
         delegations.values.toList().forEach { it.cancel() }; delegations.clear()
-        transport.disconnect(); localVoice.close(); nativeVoice.close(); alternativeVoice = null
+        if (offlinePracticeFixture == null) {
+            transport.disconnect(); localVoice.close(); nativeVoice.close()
+            VoiceConversationService.stop(getApplication(), session?.id)
+        }
+        alternativeVoice = null
         inputLevel = 0.0; outputLevel = 0.0; working = false; isMuted = false
-        VoiceConversationService.stop(getApplication(), session?.id)
         updateSession { it.endedAt = nowSeconds(); it.usageFinal = final }
         state = "ended"
         notice = when (session?.endReason) {
@@ -1003,7 +1192,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
             }
             notice = localizedContext().getString(R.string.notice_continue_settling)
         }
-        session?.let {
+        session?.takeIf { offlinePracticeFixture == null }?.let {
             if (it.id in hostedSessionIDs) {
                 hostedBindings.ended(it.id); reconcileHostedSessions(); finishHostedAssessment(clone(it))
             } else finalAssessments.submit(clone(it))
@@ -1026,7 +1215,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         notice = null; working = false; state = "idle"; voiceSession = false
     }
     private fun command(kind: String, content: String, delegationID: String? = null): Boolean {
-        if (state != "active" || !voiceSession) return false
+        if (state != "active" || !voiceSession || offlinePracticeFixture != null) return false
         if (alternativeVoice != null) {
             alternativeInstruction(content, kind == "commentary")
             return true
@@ -1105,7 +1294,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
                 if (current.id in hostedSessionIDs && hostedBindings.reachedDeadline(current.id)) {
                     updateSession { it.endReason = "Reserved conversation time ended" }; finish(false); break
                 }
-                if (nowSeconds() - current.startedAt > archive.preferences.sessionMinutes * 60) {
+                if (nowSeconds() - current.startedAt >= practiceSessionMinutes(current.practiceKind, archive.preferences.sessionMinutes) * 60) {
                     notice = localizedContext().getString(R.string.notice_time_limit_reached); end("Time limit"); break
                 }
                 inactivitySeconds = null
@@ -1201,6 +1390,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun scheduleAssessment() {
+        if (offlinePracticeFixture != null) return
         assessmentJob?.cancel()
         assessmentJob = viewModelScope.launch {
             delay(3000)
@@ -1246,6 +1436,17 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         typedReplyError = null
         val clean = text.trim().take(2000)
         if (clean.isEmpty() || working || state in listOf("connecting", "closing") || !cloudReady()) return
+        if (offlinePracticeFixture != null && state == "active") {
+            val offset = session?.nextTypedVoiceOffsetMS ?: 0
+            updateSession {
+                it.append(Fragment(speaker = Speaker.user, text = clean, startMS = offset, endMS = offset + 1, typed = true))
+                it.append(Fragment(speaker = Speaker.assistant, text = "Merci !", startMS = offset + 2, endMS = offset + 3))
+            }
+            activity.learnerEngaged(activityNow())
+            typedRepliesSent++
+            scheduleTranslation()
+            return
+        }
         if (state == "active" && alternativeVoice != null) {
             val offset = session?.nextTypedVoiceOffsetMS ?: 0
             updateSession { it.append(Fragment(speaker = Speaker.user, text = clean, startMS = offset, endMS = offset + 1,
@@ -1321,10 +1522,10 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         require(request.isValid)
         val selected = modelConfiguration
         val token = generation
-        val result = api.quickTranslate(request)
+        val result = translateForPractice(request, offlinePracticeFixture != null) { api.quickTranslate(it).text }
         if (token != generation || modelConfiguration != selected || archive.preferences.aiConsentVersion != 1 ||
             conversationProvider != ConversationProvider.PERSONAL_KEY || isRunning) throw CancellationException("Translation context changed")
-        return result.text
+        return result
     }
     suspend fun fetchVocabularyDefinition(word: String, learningLanguage: String, meaningLanguage: String): VocabularyDefinition {
         check(cloudReady() && !isRunning)
@@ -1381,40 +1582,137 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         notice = localizedContext().getString(R.string.notice_topic_ready)
     }
     private fun currentTheme(brief: TopicBrief) = ConversationTheme("current", brief.query, localizedContext().getString(R.string.topics_current_theme_subtitle), "newspaper", "Interests", "Discuss this sourced reference data: ${brief.text.take(3000)}", 0)
-    fun deleteSession(id: String) {
-        if (isRunning) return
-        if (reportState.value.selection?.sessionID == id) reports.dismiss()
-        finalAssessments.cancel(id); hostedFinalAssessmentJobs.remove(id)?.cancel(); hostedBindings.forgetLearning(id)
-        finalAssessmentTickets = finalAssessmentTickets.filterNot { it.sessionID == id }
-        if (session?.id == id) resetConversation()
-        archive = archive.copy(sessions = archive.sessions.filterNot { it.id == id }.toMutableList()); persist()
+    suspend fun deleteSession(id: String) {
+        if (isRunning || !storageReady) return
+        try {
+            writes.mutate(mutation = { current ->
+                current.copy(archive = current.archive.withPracticeSources(current.archive.sessions.filterNot { it.id == id }.toMutableList()),
+                    finalAssessments = current.finalAssessments.filterNot { it.sessionID == id })
+            }, onCommit = {
+                invalidatePracticeSelection()
+                if (reportState.value.selection?.sessionID == id) reports.dismiss()
+                finalAssessments.cancel(id); hostedFinalAssessmentJobs.remove(id)?.cancel(); hostedBindings.forgetLearning(id)
+                if (session?.id == id) resetConversation()
+            })
+        } catch (error: CancellationException) { throw error }
+        catch (_: Exception) { presentError(localizedContext().getString(R.string.error_save_progress_failed)) }
     }
     fun hideWord(id: String) {
         archive = archive.copy(preferences = archive.preferences.copy(hiddenWords = (archive.preferences.hiddenWords + id).distinct())); persist()
     }
-    fun correctPassage(sessionID: String, passageID: String, text: String) {
-        if (isRunning) return
-        val record = archive.sessions.firstOrNull { it.id == sessionID }?.let(::clone) ?: return
-        val passage = record.passages.firstOrNull { it.id == passageID && it.speaker == Speaker.user } ?: return
-        finalAssessments.cancel(sessionID); hostedFinalAssessmentJobs.remove(sessionID)?.cancel(); generation++; meanings.reset()
-        passage.fragments.forEachIndexed { index, f -> record.correctFragment(f.id, if (index == 0) text.take(10000) else "") }
-        save(record); if (session?.id == record.id) session = record
-    }
-    fun deleteLearningData() {
+    suspend fun correctPassage(sessionID: String, passageID: String, expectedRevision: String, text: String) {
         if (isRunning || !storageReady) return
-        reports.dismiss()
-        cn.gd306.tideenglish.ui.DefinitionStore.clear(getApplication())
-        learningDataGeneration++
-        finalAssessments.cancelAll(); hostedSessionIDs.forEach(hostedBindings::forgetLearning)
-        hostedFinalAssessmentJobs.values.toList().forEach { it.cancel() }; hostedFinalAssessmentJobs.clear(); resetConversation()
-        finalAssessmentTickets = emptyList()
-        archive = archive.copy(sessions = mutableListOf(), preferences = archive.preferences.copy(hiddenWords = emptyList())); persist()
+        try {
+            writes.mutate(mutation = { current ->
+                val updated = current.archive.reviseHistoryPassage(sessionID, passageID, expectedRevision, text)
+                val record = updated.sessions.first { it.id == sessionID }
+                current.copy(archive = updated, finalAssessments =
+                    if (offlinePracticeFixture != null) current.finalAssessments
+                    else ConversationProviderPolicy.enqueueRecovery(record, current.finalAssessments, hostedSessionIDs))
+            }, onCommit = {
+                invalidatePracticeSelection()
+                finalAssessments.cancel(sessionID)
+                hostedFinalAssessmentJobs.remove(sessionID)?.cancel()
+                generation++; meanings.reset()
+                if (session?.id == sessionID) session = archive.sessions.firstOrNull { it.id == sessionID }?.let(::clone)
+            })
+        } catch (error: CancellationException) { throw error }
+        catch (_: HistoryRevisionLimit) { presentError(localizedContext().getString(R.string.history_edit_revision_limit)) }
+        catch (_: CorrectionFailure) { presentError(localizedContext().getString(R.string.practice_correction_stale)) }
+        catch (_: Exception) { presentError(localizedContext().getString(R.string.error_save_progress_failed)) }
     }
-    fun exportData(): String = ArchiveCodec.encode(archive)
-    fun importData(data: String): Boolean {
-        if (isRunning || !storageReady) return false
-        return try { archive = ArchiveCodec.merge(archive, prepareImportedArchive(data)); persist(); notice = localizedContext().getString(R.string.notice_backup_imported); true }
+    suspend fun deleteLearningData() {
+        if (isRunning || !storageReady) return
+        try {
+            writes.mutate(mutation = { current ->
+                current.copy(archive = current.archive.copy(sessions = mutableListOf(), practice = null,
+                    preferences = current.archive.preferences.copy(hiddenWords = emptyList())), finalAssessments = emptyList())
+            }, onCommit = {
+                dismissCorrection()
+                cancelPractice()
+                reports.dismiss()
+                cn.gd306.tideenglish.ui.DefinitionStore.clear(getApplication())
+                learningDataGeneration++
+                finalAssessments.cancelAll(); hostedSessionIDs.forEach(hostedBindings::forgetLearning)
+                hostedFinalAssessmentJobs.values.toList().forEach { it.cancel() }; hostedFinalAssessmentJobs.clear(); resetConversation()
+                repository.deleteRecoveryBackups()
+            })
+        } catch (error: CancellationException) { throw error }
+        catch (_: Exception) { presentError(localizedContext().getString(R.string.error_save_progress_failed)) }
+    }
+    fun retryHistory() {
+        if (!storageReady && !loadingHistory) openHistory()
+    }
+
+    suspend fun exportOriginal(): String {
+        check(canRecoverOriginal && !loadingHistory && !storageReady)
+        return withContext(Dispatchers.IO) { repository.exportOriginal() }
+    }
+
+    fun restoreHistory(backup: String) {
+        if (canRecoverOriginal && !loadingHistory && !storageReady) openHistory(backup)
+    }
+
+    private fun openHistory(backup: String? = null) {
+        loadingHistory = true
+        dismissError()
+        viewModelScope.launch {
+            try {
+                val snapshot = try {
+                    withContext(Dispatchers.IO) {
+                        if (backup != null) repository.restore(backup)
+                        repository.load()
+                    }
+                } catch (error: Exception) {
+                    canRecoverOriginal = true
+                    throw error
+                }
+                canRecoverOriginal = false
+                val keyPresent = withContext(Dispatchers.IO) { runCatching { credentials.hasKey }.getOrDefault(false) }
+                archive = snapshot.archive
+                val consentScope = runCatching { ProviderConsentScope.key(modelConfiguration) }.getOrNull()
+                if (!providerConsent.getBoolean("migrated", false)) {
+                    val migration = providerConsent.edit().putBoolean("migrated", true)
+                    if (archive.preferences.aiConsentVersion == 1 && ProviderConsentScope.canMigrateLegacy(modelConfiguration))
+                        migration.putString("accepted", consentScope)
+                    check(migration.commit())
+                }
+                if (consentScope == null || providerConsent.getString("accepted", null) != consentScope)
+                    archive = archive.copy(preferences = archive.preferences.copy(aiConsentVersion = null))
+                val providers = providerStore.read(if (keyPresent) ConversationProvider.PERSONAL_KEY else ConversationProvider.HOSTED_MINUTES)
+                hostedSessionIDs = providers.hostedIDs
+                pendingHostedOwnerID = providers.pendingOwnerID
+                accountChangeBlocked = providers.pendingOwnerID != null
+                guests?.recoverAcknowledgedOwnerAtStartup(pendingHostedOwnerID,
+                    clear = { owner -> clearAcknowledgedGuestMarker(owner) },
+                    onFailure = { presentError(localizedContext().getString(R.string.error_guest_secure_storage_unavailable)) })
+                conversationProvider = if (hostedConfiguration == null) ConversationProvider.PERSONAL_KEY else providers.selection
+                finalAssessmentTickets = ConversationProviderPolicy.recoveryTickets(snapshot.finalAssessments, hostedSessionIDs)
+                hasKey = keyPresent
+                storageReady = true
+                recoverFinalAssessments()
+                refreshHostedReadiness()
+                if (accountChangeBlocked) reconcileHostedSessions()
+            } catch (_: CancellationException) { }
+            catch (_: Exception) {
+                if (backup != null) presentError(localizedContext().getString(R.string.error_import_failed))
+                else if (storageReady) presentError(localizedContext().getString(R.string.error_local_history_unavailable))
+            } finally { loadingHistory = false }
+        }
+    }
+
+    fun exportData(): String = exportLearningArchive(archive, storageReady)
+    suspend fun importData(data: String): Boolean {
+        if (isRunning || !storageReady || importing) return false
+        importing = true
+        return try {
+            writes.importData(data)
+            invalidatePracticeSelection()
+            notice = localizedContext().getString(R.string.notice_backup_imported)
+            true
+        } catch (error: CancellationException) { throw error }
         catch (_: Exception) { presentError(localizedContext().getString(R.string.error_import_failed)); false }
+        finally { importing = false }
     }
     override fun onCleared() {
         if (isRunning) finish(false)

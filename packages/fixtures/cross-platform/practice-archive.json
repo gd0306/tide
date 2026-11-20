@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "preferences": {"learningLanguageID":"es","meaningVisible":true,"meaningLanguage":"Chinese (Simplified)","sessionMinutes":15,"hiddenWords":[],"interests":"","hasOnboarded":true},
+  "sessions": [{
+    "id":"11111111-1111-4111-8111-111111111111", "languageID":"es", "startedAt":800000000, "title":"咖啡",
+    "practiceKind":"correction", "fragments":[{"id":"p1","revision":0,"previousTexts":[],"speaker":"user","text":"Yo gusto café","startMS":0,"endMS":100,"receivedAt":800000001,"meaningVisible":false,"typed":false}],
+    "assessments":[],"translations":{},"topics":[],"voiceSeconds":0,"usageFinal":false,"inputTokens":0,"outputTokens":0,"searchCalls":0
+  }],
+  "practice": {
+    "expressions":[{"id":"22222222-2222-4222-8222-222222222222","languageID":"es","text":"café","meaning":"咖啡","context":"I like coffee","createdAt":800000002,"sourceSessionID":"11111111-1111-4111-8111-111111111111","sourcePassageID":"p1","revisionKey":"p1:0"},
+      {"id":"33333333-3333-4333-8333-333333333333","languageID":"en","text":"Good morning","meaning":"早上好","context":"问候","createdAt":800000003}],
+    "corrections":[{"id":"44444444-4444-4444-8444-444444444444","languageID":"es","original":"Yo gusto café","corrected":"Me gusta el café","explanation":"表达喜好时使用 gustar。","createdAt":800000004,"sourceSessionID":"11111111-1111-4111-8111-111111111111","sourcePassageID":"p1","revisionKey":"p1:0","rehearsedAt":800000005}]
+  }
+}

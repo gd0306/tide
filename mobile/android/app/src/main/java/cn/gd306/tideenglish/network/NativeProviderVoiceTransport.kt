@@ -1,5 +1,8 @@
 package cn.gd306.tideenglish.network
 
+import cn.gd306.tideenglish.core.ReleaseModelPolicy
+import cn.gd306.tideenglish.core.GEMINI_LIVE_BASE
+import cn.gd306.tideenglish.core.GEMINI_LIVE_MODEL
 import android.content.Context
 import android.os.SystemClock
 import cn.gd306.tideenglish.core.ModelProvider
@@ -18,7 +21,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 /** Native GLM/Gemini WebSocket voice. Explicit capability failures permit same-provider local fallback. */
 class NativeProviderVoiceTransport(context:Context,private val scope:CoroutineScope,
- private val configuration:()->ProviderConfiguration,private val credential:(ProviderConfiguration)->String?) {
+ private val configuration:()->ProviderConfiguration,private val credential:(ProviderConfiguration)->String?, private val policy: ReleaseModelPolicy) {
  var onEvent:((JsonObject)->Unit)?=null
  var onFailure:((String)->Unit)?=null
  var onLevels:((Double,Double)->Unit)?=null
@@ -40,6 +43,8 @@ class NativeProviderVoiceTransport(context:Context,private val scope:CoroutineSc
  suspend fun connect(instructions:String,history:JsonArray=JsonArray(emptyList()),language:String?=null)=withContext(Dispatchers.Main.immediate) {
   disconnect();isMuted=false;val epoch=attempt
   val config=configuration().validated();require(config.provider in listOf(ModelProvider.GLM,ModelProvider.GEMINI))
+  policy.requireChat(config)
+  if (!policy.permitsNative(config)) throw NativeVoiceException("Native voice is unavailable in this release.", true)
   selected=config;this@NativeProviderVoiceTransport.instructions=instructions;initialHistory=history
   require(instructions.toByteArray().size<=65536 && history.size<=40 && history.toString().toByteArray().size<=6000)
   val key=credential(config)?.let { ProviderConfiguration.validatedCredential(it) } ?: throw NativeVoiceException("Add this provider's API key in Settings.")
@@ -47,7 +52,7 @@ class NativeProviderVoiceTransport(context:Context,private val scope:CoroutineSc
   val request=if(config.provider==ModelProvider.GLM) Request.Builder().url("https://open.bigmodel.cn/api/paas/v4/realtime").header("Authorization","Bearer "+NativeVoiceProtocol.glmToken(key,System.currentTimeMillis()/1000)).build()
    else {
     val token=try { geminiToken(key) } catch(e:Exception) { if(epoch==attempt) disconnect();throw e };ensureCurrent(epoch)
-    Request.Builder().url("https://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained").header("Authorization","Token $token").build()
+    Request.Builder().url("$GEMINI_LIVE_BASE/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained").header("Authorization","Token $token").build()
    }
   socket=client.newWebSocket(request,object:WebSocketListener() {
    override fun onOpen(webSocket:WebSocket,response:Response) { scope.launch(Dispatchers.Main.immediate) { if(epoch==attempt) { socket=webSocket;try { send(setup(config.provider,instructions,history.isNotEmpty())) } catch(_:Exception) { fail(epoch,NativeVoiceException("Native voice setup could not be sent.")) } } else webSocket.cancel() } }
@@ -180,7 +185,7 @@ class NativeProviderVoiceTransport(context:Context,private val scope:CoroutineSc
  private suspend fun geminiToken(key:String):String {
   val now=Instant.now()
   val body=buildJsonObject { put("uses",1);put("newSessionExpireTime",now.plusSeconds(60).toString());put("expireTime",now.plusSeconds(3900).toString()) }
-  val request=Request.Builder().url("https://generativelanguage.googleapis.com/v1beta/auth_tokens").header("x-goog-api-key",key).post(body.toString().toRequestBody("application/json".toMediaType())).build()
+  val request=Request.Builder().url("$GEMINI_LIVE_BASE/v1beta/auth_tokens").header("x-goog-api-key",key).post(body.toString().toRequestBody("application/json".toMediaType())).build()
   return suspendCancellableCoroutine { continuation ->
    val call=client.newBuilder().callTimeout(20,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).build().newCall(request);continuation.invokeOnCancellation { call.cancel() }
    call.enqueue(object:Callback {
@@ -205,6 +210,6 @@ class NativeProviderVoiceTransport(context:Context,private val scope:CoroutineSc
  private fun setup(provider:ModelProvider,instructions:String,history:Boolean):JsonObject=if(provider==ModelProvider.GLM) buildJsonObject {
   put("type","session.update");put("session",buildJsonObject { put("modalities",buildJsonArray { add(JsonPrimitive("audio"));add(JsonPrimitive("text")) });put("input_audio_format","wav");put("output_audio_format","pcm");put("instructions",instructions);put("turn_detection",buildJsonObject { put("type","server_vad") });put("beta_fields",buildJsonObject { put("chat_mode","audio");put("tts_source","e2e");put("auto_search",false) });put("tools",JsonArray(emptyList())) })
  } else buildJsonObject { put("setup",buildJsonObject {
-  put("model","models/gemini-3.8-live");put("generationConfig",buildJsonObject { put("responseModalities",buildJsonArray { add(JsonPrimitive("AUDIO")) }) });put("systemInstruction",buildJsonObject { put("parts",buildJsonArray { add(buildJsonObject { put("text",instructions) }) }) });put("inputAudioTranscription",buildJsonObject {});put("outputAudioTranscription",buildJsonObject {});put("sessionResumption",buildJsonObject {});put("realtimeInputConfig",buildJsonObject { put("automaticActivityDetection",buildJsonObject { put("disabled",false) });put("activityHandling","START_OF_ACTIVITY_INTERRUPTS") });put("contextWindowCompression",buildJsonObject { put("slidingWindow",buildJsonObject {}) });if(history) put("historyConfig",buildJsonObject { put("initialHistoryInClientContent",true) })
+  put("model",GEMINI_LIVE_MODEL);put("generationConfig",buildJsonObject { put("responseModalities",buildJsonArray { add(JsonPrimitive("AUDIO")) }) });put("systemInstruction",buildJsonObject { put("parts",buildJsonArray { add(buildJsonObject { put("text",instructions) }) }) });put("inputAudioTranscription",buildJsonObject {});put("outputAudioTranscription",buildJsonObject {});put("sessionResumption",buildJsonObject {});put("realtimeInputConfig",buildJsonObject { put("automaticActivityDetection",buildJsonObject { put("disabled",false) });put("activityHandling","START_OF_ACTIVITY_INTERRUPTS") });put("contextWindowCompression",buildJsonObject { put("slidingWindow",buildJsonObject {}) });if(history) put("historyConfig",buildJsonObject { put("initialHistoryInClientContent",true) })
  }) }
 }

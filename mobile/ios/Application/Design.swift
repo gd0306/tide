@@ -173,7 +173,6 @@ struct OceanNavigation: View {
         .padding(.horizontal, 12).padding(.top, 3)
         .background(TideEnglishColor.cream)
         .overlay(alignment: .top) { Rectangle().fill(TideEnglishColor.rule).frame(height: 1) }
-        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .accessibilityElement(children: .contain).accessibilityIdentifier("main-navigation")
     }
     private func item(_ title: String, symbol: String, value: Int) -> some View {

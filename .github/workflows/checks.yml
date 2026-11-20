@@ -17,6 +17,29 @@ jobs:
         with:
           persist-credentials: false
       - run: swift test --package-path mobile/ios
+  ios-app:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify generated application resources and project
+        run: |
+          python3 tools/generate_public_information.py --check
+          python3 tools/generate_project.py
+          git diff --exit-code -- mobile/ios/TideEnglish.xcodeproj/project.pbxproj
+      - name: Compile application and run isolated offline UI smoke checks
+        run: python3 tools/run_ios_checks.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: tide-ios-ui-results
+          path: .build/*.xcresult
+          include-hidden-files: true
+          retention-days: 7
   gateway:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

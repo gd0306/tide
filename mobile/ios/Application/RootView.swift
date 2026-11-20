@@ -27,7 +27,12 @@ struct RootView: View {
             Tab(UI("Themes"), systemImage: "square.grid.2x2", value: 1) {
                 shell { ThemesView(coordinator: coordinator) { theme in coordinator.chooseTheme(theme); tab = 0 } }
             }
-            Tab(UI("Words"), systemImage: "book", value: 2) { shell { WordsView(coordinator: coordinator) } }
+            Tab(UI("Words"), systemImage: "book", value: 2) { shell {
+                WordsView(coordinator: coordinator) { correction in
+                    tab = 0
+                    coordinator.start(practice: .correction(correction))
+                }
+            } }
         }
         #if DEBUG && targetEnvironment(simulator)
         .overlay(alignment: .topLeading) {
@@ -51,12 +56,25 @@ struct RootView: View {
         #endif
         .toolbar(.hidden, for: .tabBar)
         .tint(TideEnglishColor.ink)
-        .sheet(isPresented: $coordinator.showSettings, onDismiss: { Task { await coordinator.refreshContinuation() } }) {
+        .sheet(isPresented: $coordinator.showSettings, onDismiss: {
+            coordinator.settingsClosed()
+            Task { await coordinator.refreshContinuation() }
+        }) {
             SettingsView(coordinator: coordinator)
                 .presentationDetents([.large])
         }
         .sheet(isPresented: $coordinator.showAIConsent, onDismiss: { coordinator.resumeAfterAIConsent() }) {
             AIConsentView(summary: coordinator.providerConsentSummary, agree: { coordinator.acceptAIConsent() }, decline: { coordinator.declineAIConsent() })
+        }
+        .confirmationDialog(UI("Continue your selected practice?"), isPresented: Binding(
+            get: { coordinator.practiceToConfirm != nil },
+            set: { if !$0 { coordinator.cancelPracticeConfirmation() } }
+        ), titleVisibility: .visible, presenting: coordinator.practiceToConfirm) { intent in
+            Button(UI(intent.kind == "daily" ? "Start five-minute practice" : "Say it again")) {
+                coordinator.cancelPracticeConfirmation()
+                coordinator.start(practice: intent)
+            }
+            Button(UI("Cancel"), role: .cancel) { coordinator.cancelPracticeConfirmation() }
         }
         .fullScreenCover(isPresented: $onboarding) { OnboardingView(coordinator: coordinator) { coordinator.store.updatePreferences { $0.hasOnboarded = true }; onboarding = false } }
         .alert(UI("A little interruption"), isPresented: Binding(get: { coordinator.error != nil || coordinator.store.error != nil }, set: { if !$0 { coordinator.error = nil; coordinator.store.error = nil; coordinator.hostedAccessFailure = nil } })) {
@@ -117,6 +135,7 @@ struct RootView: View {
             coordinator.prepareConversationPolicyPreview()
             coordinator.prepareCaptionFollowingPreview()
             coordinator.prepareVocabularyPreview()
+            coordinator.preparePracticePreview()
             if VocabularyPerformancePreview.enabled { VocabularyPerformancePreview.seed(coordinator.store) }
             if ProcessInfo.processInfo.arguments.contains("--verify-network-recovery") {
                 coordinator.notice = await LiveTransport.verifyRecoveryLifecycle() ? "Network recovery lifecycle passed" : "Network recovery lifecycle failed"
@@ -157,6 +176,8 @@ struct TalkView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .title2) private var targetLineHeight = 30.0
     @ScaledMetric(relativeTo: .subheadline) private var meaningLineHeight = 21.0
+    @State private var dailyPreview = false
+    @State private var dailyStart: DailyPracticePlan?
     @State private var typing = false
     @State private var conversationChoice = false
     @State private var openAccountAfterContinuation = false
@@ -182,6 +203,19 @@ struct TalkView: View {
             } else {
                 talkContent(scrollPage: false, compact: compact)
                     .frame(height: geometry.size.height)
+            }
+        }
+        .sheet(isPresented: $dailyPreview, onDismiss: {
+            if let plan = dailyStart {
+                dailyStart = nil
+                coordinator.start(practice: .daily(plan))
+            }
+        }) {
+            if let plan = DailyPracticePlan.make(languageID: coordinator.language.id, words: coordinator.store.learner.words),
+               let theme = coordinator.language.themes.first(where: { $0.id == plan.themeID }) {
+                DailyPracticePreview(plan: plan, theme: theme) {
+                    dailyStart = plan; dailyPreview = false
+                }
             }
         }
         .sheet(isPresented: $typing) { TypedReplyView(coordinator: coordinator) }
@@ -228,8 +262,12 @@ struct TalkView: View {
         let hasLongPassage = coordinator.assistantPassage != nil &&
             (coordinator.caption.count > 60 || coordinator.language.id == "zh")
         return VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(UI("Daily practice")).font(.caption.weight(.medium)).foregroundStyle(TideEnglishColor.secondary)
+            let headerLayout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
+            headerLayout {
+                Button(UI("Today’s five minutes"), systemImage: "clock") { dailyPreview = true }
+                    .font(.subheadline.weight(.medium)).frame(minHeight: 44).foregroundStyle(TideEnglishColor.accent)
+                    .disabled(coordinator.isRunning || coordinator.hasContinuation)
+                    .accessibilityIdentifier("daily-practice")
                 Spacer()
                 Text(coordinator.selectedTheme.map { $0.id == "current" ? $0.title : UI($0.title) } ?? UI(coordinator.language.talkTitle))
                     .font(.caption).foregroundStyle(TideEnglishColor.secondary)
@@ -394,6 +432,7 @@ struct LookupView: View {
     @State private var error: String?
     var body: some View {
         NavigationStack {
+            ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text(item.word).font(.system(.largeTitle, design: .rounded, weight: .medium))
                 if coordinator.language.id == "zh" { PinyinHelp(text: item.word) }
@@ -401,8 +440,11 @@ struct LookupView: View {
                 if let explanation { Text(explanation).font(.body).textSelection(.enabled) }
                 else if let error { Text(UI(error)).foregroundStyle(TideEnglishColor.secondary) }
                 else { ProgressView(UI("Finding the meaning…")) }
+                SaveExpressionButton(coordinator: coordinator, expression: SavedExpression(languageID: coordinator.language.id,
+                    text: item.word, meaning: explanation ?? "", context: item.sentence))
                 Spacer()
-            }.padding(28).frame(maxWidth: .infinity, alignment: .leading).background(TideEnglishColor.cream)
+            }.padding(28).frame(maxWidth: .infinity, alignment: .leading)
+            }.background(TideEnglishColor.cream)
                 .navigationTitle(UI("A little meaning")).navigationBarTitleDisplayMode(.inline)
         }.presentationDetents([.medium, .large])
             .task {

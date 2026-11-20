@@ -7,6 +7,43 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
 import org.junit.Test
 class ProviderTeachingClientTest {
+ @Test fun undeclaredModelCannotReadKeyOrEmitAnyTeachingRequest()=runBlocking {
+  val config=ProviderConfiguration(ModelProvider.DEEPSEEK,"synthetic-chat")
+  val metadata="""{"schemaVersion":1,"publisherName":"","supportEmail":"","publicPagesReady":false,"links":{},"appFilingNumber":"","modelPolicy":"declaredOnly","aiServices":[]}"""
+  var requests=0
+  var keyReads=0
+  val http=OkHttpClient.Builder().addInterceptor { chain ->
+   requests++
+   Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(403).message("denied").body("{}".toResponseBody()).build()
+  }.build()
+  val client=ProviderTeachingClient({config},{keyReads++; "synthetic-key"},http,ReleaseModelPolicy.fromSource(metadata,false))
+  assertTrue(runCatching { client.respond("Teach","Hi") }.isFailure)
+  assertTrue(runCatching { client.streamMeaning("Translate","Hi") {} }.isFailure)
+  assertTrue(runCatching { client.quickTranslate(QuickTranslationRequest("你好","Chinese (Simplified)","English")) }.isFailure)
+  assertEquals(0,requests)
+  assertEquals(0,keyReads)
+ }
+ @Test fun endedPracticeFixtureQuickTranslationNeverReadsKeyOrEntersHttp() = runBlocking {
+  var keyReads = 0
+  var requests = 0
+  val http = OkHttpClient.Builder().addInterceptor { chain ->
+   requests++
+   val body = """{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"Live translation"}}]}"""
+   Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+    .code(200).message("OK").body(body.toResponseBody()).build()
+  }.build()
+  val client = ProviderTeachingClient({ ProviderConfiguration(ModelProvider.DEEPSEEK) },
+   { keyReads++; "synthetic-key" }, http, policy = ReleaseModelPolicy.unrestricted)
+  val request = QuickTranslationRequest("Bonjour", "French", "English")
+  val translated = translateForPractice(request, offlineFixture = true) { client.quickTranslate(it).text }
+  assertEquals(0, keyReads)
+  assertEquals(0, requests)
+  assertEquals("Hello!", translated)
+  assertEquals("Live translation", translateForPractice(request, offlineFixture = false) { client.quickTranslate(it).text })
+  assertEquals(1, keyReads)
+  assertEquals(1, requests)
+ }
+
  @Test fun translationOutputBudgetDoesNotChangeOtherHelpers()=runBlocking {
   for(provider in listOf(ModelProvider.OPENAI,ModelProvider.DEEPSEEK,ModelProvider.GLM,ModelProvider.GEMINI)) {
    val bodies=mutableListOf<JsonObject>()
@@ -17,7 +54,7 @@ class ProviderTeachingClientTest {
      else """{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"hello"}}]}"""
     Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK").body(response.toResponseBody()).build()
    }.build()
-   val client=ProviderTeachingClient({ProviderConfiguration(provider)},{"synthetic-key"},http)
+   val client=ProviderTeachingClient({ProviderConfiguration(provider)},{"synthetic-key"},http,policy=ReleaseModelPolicy.unrestricted)
    client.quickTranslate(QuickTranslationRequest("你好","Chinese (Simplified)","English"))
    client.respond("Explain","Hello")
    val field=if(provider==ModelProvider.OPENAI) "max_output_tokens" else "max_tokens"
@@ -28,7 +65,7 @@ class ProviderTeachingClientTest {
  @Test fun selectedProviderAndModelAreSentWithoutRedirects()=runBlocking {
   var request: Request?=null
   val http=OkHttpClient.Builder().addInterceptor { chain -> request=chain.request(); Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK").body("""{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"hello"}}]}""".toResponseBody()).build() }.build()
-  val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.DEEPSEEK,"my-model")},{"synthetic-key"},http)
+  val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.DEEPSEEK,"my-model")},{"synthetic-key"},http,policy=ReleaseModelPolicy.unrestricted)
   assertEquals("hello",client.respond("Teach","hi").text)
   assertEquals("api.deepseek.com",request!!.url.host)
   val buffer=okio.Buffer(); request!!.body!!.writeTo(buffer)
@@ -37,13 +74,13 @@ class ProviderTeachingClientTest {
  @Test fun refusesTruncatedAndRedactsProviderErrors()=runBlocking {
   for ((code,body) in listOf(200 to """{"choices":[{"index":0,"finish_reason":"length","message":{"role":"assistant","content":"partial"}}]}""",401 to "secret-provider-diagnostic")) {
    val http=OkHttpClient.Builder().addInterceptor { c -> Response.Builder().request(c.request()).protocol(Protocol.HTTP_1_1).code(code).message("OK").body(body.toResponseBody()).build() }.build()
-   val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.GLM)},{"synthetic-key"},http)
+   val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.GLM)},{"synthetic-key"},http,policy=ReleaseModelPolicy.unrestricted)
    val error=runCatching { client.respond("Teach","hi") }.exceptionOrNull()
    assertNotNull(error); assertFalse(error!!.message.orEmpty().contains("secret")); assertFalse(error.message.orEmpty().contains("partial"))
   }
  }
  @Test fun unsupportedSearchFailsBeforeAnyNetworkRequest()=runBlocking {
-  val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.DEEPSEEK)},{"synthetic-key"})
+  val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.DEEPSEEK)},{"synthetic-key"},policy=ReleaseModelPolicy.unrestricted)
   val error=runCatching { client.respond("Teach","news",search=true) }.exceptionOrNull()
   assertTrue(error?.message.orEmpty().contains("search",ignoreCase=true))
  }
@@ -54,7 +91,7 @@ class ProviderTeachingClientTest {
    server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(302).addHeader("Location",server.url("/stolen")))
    server.enqueue(okhttp3.mockwebserver.MockResponse().setBody("unexpected redirect"))
    val http=OkHttpClient.Builder().addInterceptor { chain -> chain.proceed(chain.request().newBuilder().url(server.url("/chat/completions")).build()) }.build()
-   val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.DEEPSEEK)},{"synthetic-key"},http)
+   val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.DEEPSEEK)},{"synthetic-key"},http,policy=ReleaseModelPolicy.unrestricted)
    assertNotNull(runCatching { client.respond("Teach","hi") }.exceptionOrNull())
    assertEquals(1,server.requestCount)
   } finally { server.shutdown() }
@@ -65,7 +102,7 @@ class ProviderTeachingClientTest {
    request=chain.request()
    Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK").body("""{"status":"completed","output":[{"content":[{"type":"output_text","text":"hello"}]}]}""".toResponseBody()).build()
   }.build()
-  val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.OPENAI,"chosen-chat")},{"synthetic-key"},http)
+  val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.OPENAI,"chosen-chat")},{"synthetic-key"},http,policy=ReleaseModelPolicy.unrestricted)
   assertEquals("hello",client.respond("Teach","hi",search=true).text)
   assertEquals("/v1/responses",request!!.url.encodedPath)
   val buffer=okio.Buffer();request!!.body!!.writeTo(buffer)
@@ -77,7 +114,7 @@ class ProviderTeachingClientTest {
   val http=OkHttpClient.Builder().addInterceptor { chain ->
    Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(429).message("Limit").body("""{"error":{"code":"insufficient_quota","message":"raw-secret-diagnostic"}}""".toResponseBody()).build()
   }.build()
-  val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.DEEPSEEK)},{"synthetic-key"},http)
+  val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.DEEPSEEK)},{"synthetic-key"},http,policy=ReleaseModelPolicy.unrestricted)
   val error=runCatching { client.respond("Teach","hi") }.exceptionOrNull() as ProviderTeachingClient.ProviderException
   assertEquals(429,error.status)
   assertEquals(ProviderFailureKind.quota,error.kind)
@@ -95,7 +132,7 @@ data: [DONE]
 """
   for(complete in listOf(true,false)) {
    val http=OkHttpClient.Builder().addInterceptor { chain -> Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK").header("Content-Type","text/event-stream").body((if(complete) events else events.substringBefore("data: [DONE]")).toResponseBody()).build() }.build()
-   val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.DEEPSEEK)},{"synthetic-key"},http)
+   val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.DEEPSEEK)},{"synthetic-key"},http,policy=ReleaseModelPolicy.unrestricted)
    val updates=mutableListOf<String>()
    val result=runCatching { client.streamMeaning("Translate","morning") { updates+=it } }
    assertEquals(listOf("Good","Good morning"),updates)
@@ -110,7 +147,7 @@ data: {"type":"response.completed","response":{"status":"completed","output":[{"
 
 """
   val http=OkHttpClient.Builder().addInterceptor { chain -> request=chain.request();Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK").header("Content-Type","text/event-stream").body(events.toResponseBody()).build() }.build()
-  val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.OPENAI,"chosen-model")},{"synthetic-key"},http)
+  val client=ProviderTeachingClient({ProviderConfiguration(ModelProvider.OPENAI,"chosen-model")},{"synthetic-key"},http,policy=ReleaseModelPolicy.unrestricted)
   val updates=mutableListOf<String>()
   assertEquals("Hello",client.streamMeaning("Translate","hello") { updates+=it }.text)
   assertEquals(listOf("Hello"),updates)

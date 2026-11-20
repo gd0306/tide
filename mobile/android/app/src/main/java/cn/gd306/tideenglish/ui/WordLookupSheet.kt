@@ -17,7 +17,7 @@ import cn.gd306.tideenglish.R
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun WordLookupSheet(word: String, sentence: String, languageID: String,
-    explanation: String?, error: String?, loading: Boolean, onDismiss: () -> Unit) {
+    explanation: String?, error: String?, loading: Boolean, onDismiss: () -> Unit, saveAction: @Composable () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = TideEnglishColors.Cream,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().testTag("word-lookup-sheet")) {
@@ -25,7 +25,7 @@ internal fun WordLookupSheet(word: String, sentence: String, languageID: String,
                 Text(stringResource(R.string.talk_lookup_dialog_title), style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f))
                 SoftRoundButton(TideEnglishSymbol.Close, stringResource(R.string.common_close), onDismiss,
-                    modifier = Modifier.testTag("word-lookup-close"), diameter = 40.dp)
+                    modifier = Modifier.testTag("word-lookup-close"), diameter = 48.dp)
             }
             Column(Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState())
                 .padding(28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -46,6 +46,7 @@ internal fun WordLookupSheet(word: String, sentence: String, languageID: String,
                         Text(stringResource(R.string.talk_meaning_loading), color = TideEnglishColors.Secondary)
                     }
                 }
+                if (!loading) saveAction()
             }
         }
     }

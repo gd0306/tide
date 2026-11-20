@@ -107,7 +107,7 @@ struct OnboardingView: View {
                 .font(.footnote).foregroundStyle(TideEnglishColor.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("onboarding-ai-consent")
-            Link(UI("Privacy policy"), destination: URL(string: "https://tide-english.example/privacy/")!)
+            PublicInformationLink(page: .privacy)
                 .font(.footnote).underline().accessibilityIdentifier("onboarding-privacy-policy")
         }
     }
@@ -220,7 +220,7 @@ struct AIConsentView: View {
             Text(UI(summary)).font(.body)
             Text(UI("Your learning record is stored on this iPhone. \(AppBrand.name) does not save raw audio. You can keep browsing your saved words and conversations without agreeing."))
                 .font(.subheadline).foregroundStyle(TideEnglishColor.secondary)
-            Link(UI("Privacy policy"), destination: URL(string: "https://tide-english.example/privacy/")!).font(.subheadline).underline()
+            PublicInformationLink(page: .privacy).font(.subheadline).underline()
             Button(UI("Agree and continue"), action: agree).font(.headline).frame(maxWidth: .infinity).padding(18)
                 .foregroundStyle(TideEnglishColor.onAccent).background(TideEnglishColor.accent, in: RoundedRectangle(cornerRadius: 12)).accessibilityIdentifier("ai-consent-agree")
             Button(UI("Not now"), action: decline).font(.subheadline).frame(maxWidth: .infinity, minHeight: 44)
@@ -246,7 +246,7 @@ struct AIProcessingSettingsView: View {
                          : "AI processing is off. Your saved words and conversations remain available on this iPhone."))
                         .foregroundStyle(TideEnglishColor.secondary)
                         .accessibilityIdentifier("ai-processing-status")
-                    Link(UI("Privacy policy"), destination: URL(string: "https://tide-english.example/privacy/")!).underline()
+                    PublicInformationLink(page: .privacy).underline()
                     if coordinator.hasAIConsent {
                         Button(UI("Withdraw permission")) { confirmingWithdrawal = true }
                             .frame(maxWidth: .infinity, minHeight: 44)

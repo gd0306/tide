@@ -118,7 +118,8 @@ class AccountSheetTest {
         compose.onNodeWithTag("account-deletion-request").assertExists()
         compose.onNodeWithText(context.getString(R.string.account_deleted)).assertDoesNotExist()
         compose.onNodeWithTag("account-deletion-web").performScrollTo().performClick()
-        compose.runOnIdle { assertEquals("https://tide-english.example/support/#delete-account", opened.last()) }
+        compose.onNodeWithTag("public-information-support").assertExists()
+        compose.runOnIdle { assertEquals(1, opened.size) }
     }
 
     @Test fun noEmailOrBrowserAppKeepsACopyableContactAndDoesNotClaimSubmission() {
@@ -137,6 +138,8 @@ class AccountSheetTest {
         compose.onNodeWithTag("account-deletion-email").performClick()
         compose.onNodeWithTag("account-deletion-open-failed").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("account-deletion-web").performScrollTo().performClick()
+        compose.onNodeWithTag("public-information-support").assertExists()
+        compose.onNodeWithTag("public-information-close").performClick()
         compose.onNodeWithTag("account-deletion-open-failed").assertExists()
         compose.onNodeWithTag("account-deletion-copy-email").performScrollTo().performClick()
         compose.runOnIdle { assertEquals("1215742191@qq.com", clipboard.value?.text) }

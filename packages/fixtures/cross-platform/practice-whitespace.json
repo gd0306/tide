@@ -1,0 +1,6 @@
+{"cases":[
+ {"text":"\u0085","blank":true}, {"text":"\u200b","blank":false}, {"text":"\u001c","blank":false},
+ {"text":"\u0020\u00a0\u2003","blank":true}, {"text":"\u0085hola\u0085","blank":false,"normalized":"hola"},
+ {"text":"\u200bhola\u200b","blank":false,"normalized":"\u200bhola\u200b"},
+ {"text":"\u001chola\u001c","blank":false,"normalized":"\u001chola\u001c"}
+]}

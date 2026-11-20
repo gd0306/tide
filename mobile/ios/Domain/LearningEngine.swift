@@ -59,7 +59,7 @@ public enum LearningEngine {
                     $0.speaker == .assistant && $0.startMS <= passage.startMS && passage.startMS - $0.endMS < 90_000 &&
                     join($0.fragments.map(\.text)).localizedCaseInsensitiveContains(word.form)
                 }
-                if passage.fragments.contains(where: { $0.meaningVisible || $0.typed }) || recentlyModeled { result.kind = .assisted }
+                if session.practiceKind == "correction" || passage.fragments.contains(where: { $0.meaningVisible || $0.typed }) || recentlyModeled { result.kind = .assisted }
             }
             return result
         }

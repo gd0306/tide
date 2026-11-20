@@ -108,7 +108,7 @@ struct HostedConnectRequest {
             onEvent?(["type": "tideenglish.session.created", "session": ["id": lease.providerSessionID]])
         } else {
             let result = try await api.post("live/sessions", body: [
-                "session": ["model": "gpt-live-1", "instructions": instructions, "input": history,
+                "session": ["model": ReleaseModelPolicy.openAILiveModel, "instructions": instructions, "input": history,
                             "store": false, "delegation": ["type": "client"], "audio": ["output": ["voice": "marin"]]],
                 "transport": ["type": "webrtc", "sdp": sdp]
             ])

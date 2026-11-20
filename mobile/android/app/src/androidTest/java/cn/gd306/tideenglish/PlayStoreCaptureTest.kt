@@ -38,6 +38,9 @@ import org.junit.rules.TestRule
 import org.junit.runner.RunWith
 import org.junit.runners.model.Statement
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 /** English store UI with Spanish learning fixtures, plus a Spanish layout regression. */
 @RunWith(AndroidJUnit4::class)
@@ -69,9 +72,11 @@ class PlayStoreCaptureTest {
         assertEquals("cn.gd306.tideenglish.android.uitest", InstrumentationRegistry.getInstrumentation().targetContext.packageName)
         assertTrue(BuildConfig.MANAGED_API_ORIGIN.isBlank())
         vm = compose.awaitHistoryLoaded()
-        compose.runOnIdle {
-            original = vm.archive.preferences.copy()
+        compose.runOnIdle { original = vm.archive.preferences.copy() }
+        runBlocking { withContext(Dispatchers.Main) {
             assertTrue(vm.importData(ArchiveCodec.encode(Archive(sessions = records.toMutableList()))))
+        } }
+        compose.runOnIdle {
             vm.updatePreferences(original.copy(learningLanguageID = "es", meaningLanguage = "English",
                 meaningVisible = true, hasOnboarded = true, aiConsentVersion = null))
         }
@@ -84,9 +89,9 @@ class PlayStoreCaptureTest {
             fixtureState("meaning", "")
             TideEnglishViewModel::class.java.getDeclaredField("voiceSession").apply { isAccessible = true }.setBoolean(vm, false)
             vm.chooseTheme(null)
-            records.forEach { vm.deleteSession(it.id) }
-            vm.updatePreferences(original)
         }
+        runBlocking { withContext(Dispatchers.Main) { records.forEach { vm.deleteSession(it.id) } } }
+        compose.runOnIdle { vm.updatePreferences(original) }
     }
 
     // No production setter or provider call is added to stage the conversation. These are

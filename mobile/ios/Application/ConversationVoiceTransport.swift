@@ -42,6 +42,10 @@ import TideEnglishCore
                  hosted: HostedConnectRequest? = nil, locale: String) async throws {
         disconnect()
         let token = UUID(); attempt = token
+        if hosted == nil { _ = try api.modelPolicy.requireChat(api.configuration) }
+        if hosted == nil, api.configuration.provider == .openAI, !api.modelPolicy.permitsNative(api.configuration) {
+            throw ReleaseModelPolicy.Unavailable()
+        }
         if hosted != nil || api.configuration.provider == .openAI {
             mode = .openAI
             try await openAI.connect(api: api, instructions: instructions, history: history, hosted: hosted)

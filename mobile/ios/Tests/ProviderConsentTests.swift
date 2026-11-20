@@ -17,6 +17,7 @@ final class ProviderConsentTests: XCTestCase {
     }
     func testLegacyOpenAIConsentCannotAuthorizeAnotherSupplier() throws {
         XCTAssertTrue(ProviderConsent.isAllowed(configuration: .init(provider: .openAI), version: 1, requiredVersion: 1, acceptedIdentity: nil))
+        XCTAssertFalse(ProviderConsent.isAllowed(configuration: .init(provider: .openAI), version: 1, requiredVersion: 1, acceptedIdentity: "revoked"))
         XCTAssertFalse(ProviderConsent.isAllowed(configuration: .init(provider: .deepSeek), version: 1, requiredVersion: 1, acceptedIdentity: nil))
         XCTAssertFalse(ProviderConsent.isAllowed(configuration: .init(provider: .glm), version: 1, requiredVersion: 1, acceptedIdentity: nil))
     }

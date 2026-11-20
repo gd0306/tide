@@ -610,7 +610,7 @@ extension AudioVerification {
         do {
             var request = URLRequest(url: GeminiLiveProtocol.tokenURL)
             request.httpMethod = "POST"
-            request.setValue(try GeminiLiveProtocol.checkedSecret(api.credential()), forHTTPHeaderField: "x-goog-api-key")
+            request.setValue(try GeminiLiveProtocol.checkedSecret(api.nativeCredential()), forHTTPHeaderField: "x-goog-api-key")
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: GeminiLiveProtocol.tokenBody(now: .now))
             let (bytes, response) = try await session.bytes(for: request)

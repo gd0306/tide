@@ -12,9 +12,8 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import cn.gd306.tideenglish.core.*
-import cn.gd306.tideenglish.network.APIClient
+import cn.gd306.tideenglish.network.ProviderTeachingClient
 import okhttp3.*
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
@@ -34,7 +33,7 @@ class CaptionParityTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
     private lateinit var vm: TideEnglishViewModel
     private lateinit var original: String
-    private lateinit var originalAPI: cn.gd306.tideenglish.network.TeachingClient
+    private lateinit var originalAPI: ProviderTeachingClient
     private lateinit var originalProvider: ConversationProvider
     private lateinit var originalReadiness: HostedReadiness
     private var originalHasKey = false
@@ -53,7 +52,7 @@ class CaptionParityTest {
             original = ArchiveCodec.encode(vm.archive); originalHasKey = vm.hasKey
             originalProvider = vm.conversationProvider; originalReadiness = vm.hostedReadiness
             val field = TideEnglishViewModel::class.java.getDeclaredField("api").apply { isAccessible = true }
-            originalAPI = field.get(vm) as cn.gd306.tideenglish.network.TeachingClient
+            originalAPI = field.get(vm) as ProviderTeachingClient
             // An application interceptor returns before DNS or a socket can be used. No provider key or network is involved.
             val client = OkHttpClient.Builder().addInterceptor { chain ->
                 val body = Buffer().also { chain.request().body!!.writeTo(it) }.readUtf8()
@@ -97,7 +96,8 @@ class CaptionParityTest {
                 Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(status).message(if (status == 200) "OK" else "Fixture error")
                     .body(payload.toString().toResponseBody("application/json".toMediaType())).build()
             }.build()
-            field.set(vm, APIClient("fixture-only", client, "https://offline.invalid/v1/".toHttpUrl()))
+            field.set(vm, ProviderTeachingClient({ ProviderConfiguration(ModelProvider.OPENAI) },
+                { "fixture-only" }, client, ReleaseModelPolicy.unrestricted))
             state("hasKey", true)
             vm.updatePreferences(vm.archive.preferences.copy(learningLanguageID = "zh", meaningLanguage = "English",
                 meaningVisible = true, hasOnboarded = true, aiConsentVersion = 1))

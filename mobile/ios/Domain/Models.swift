@@ -5,6 +5,9 @@ public enum EvidenceKind: String, Codable, Sendable { case exposure, understandi
 public enum Outcome: String, Codable, Sendable { case success, partial, breakdown, uncertain }
 
 public struct Fragment: Codable, Identifiable, Equatable, Sendable {
+    static let maximumRevision = 1_000_000
+    var canRevise: Bool { revision < Self.maximumRevision }
+
     public var id: String
     public var revision: Int = 0
     public var previousTexts: [String] = []
@@ -162,6 +165,7 @@ public struct SessionRecord: Codable, Identifiable, Sendable {
     public var outputTokens = 0
     public var searchCalls = 0
     public var endReason: String?
+    public var practiceKind: String?
     public init(languageID: String = LanguageRegistry.defaultID, themeID: String? = nil, title: String? = nil) {
         self.languageID = languageID; self.themeID = themeID
         self.title = title ?? LanguageRegistry.module(for: languageID)?.defaultTitle ?? "A conversation"
@@ -180,7 +184,7 @@ public struct SessionRecord: Codable, Identifiable, Sendable {
         assessments.removeAll { current[$0.passageID] != $0.revisionKey }
     }
     public mutating func correctFragment(id: String, text: String) {
-        guard let index = fragments.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = fragments.firstIndex(where: { $0.id == id }), fragments[index].canRevise else { return }
         fragments[index].previousTexts.append(fragments[index].text)
         fragments[index].text = text; fragments[index].revision += 1
         translations = translations.filter { !Self.translationKey($0.key, includesFragment: id) }
@@ -206,18 +210,35 @@ public struct Preferences: Codable, Sendable {
     public init() {}
 }
 
+public enum HistoryEditError: Error, Equatable { case revisionLimit }
+
 public struct Archive: Codable, Sendable {
     public static let maximumEncodedBytes = 30_000_000
     private static let maximumSessions = 10_000
     public var schemaVersion = 2
     public var sessions: [SessionRecord] = []
     public var preferences = Preferences()
+    public var practice: PracticeLibrary?
     public init() {}
+    /// Applies an edit to the selected user passage and invalidates corrections tied to old revisions.
+    public mutating func reviseHistoryPassage(sessionID: UUID, passageID: String, text: String) throws -> Bool {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionID }),
+              sessions[index].endedAt != nil,
+              let passage = sessions[index].passages.first(where: { $0.id == passageID && $0.speaker == .user }) else { return false }
+        guard passage.fragments.allSatisfy(\.canRevise) else { throw HistoryEditError.revisionLimit }
+        for (offset, fragment) in passage.fragments.enumerated() {
+            sessions[index].correctFragment(id: fragment.id, text: offset == 0 ? String(text.prefix(10_000)) : "")
+        }
+        practice?.invalidateCorrections(sessions: sessions)
+        return true
+    }
+
     public static func decode(_ data: Data) throws -> Archive {
         guard data.count <= maximumEncodedBytes else { throw ArchiveError.tooLarge }
         let migrated = try migrate(data)
-        let archive = try JSONDecoder().decode(Archive.self, from: migrated)
+        var archive = try JSONDecoder().decode(Archive.self, from: migrated)
         try archive.validate()
+        archive.practice?.invalidateCorrections(sessions: archive.sessions)
         return archive
     }
     /// Bound the selected file before loading it. The read limit also covers growth after the size check.
@@ -247,6 +268,11 @@ public struct Archive: Codable, Sendable {
             session.assessments = session.assessments.compactMap { LearningEngine.validate($0, session: session) }
             candidate.sessions.append(session)
         }
+        candidate.practice?.invalidateCorrections(sessions: candidate.sessions)
+        if var incomingPractice = incoming.practice {
+            incomingPractice.invalidateCorrections(sessions: candidate.sessions)
+            candidate.practice = try (candidate.practice ?? PracticeLibrary()).merging(incomingPractice)
+        }
         try candidate.validate()
         guard try candidate.encoded().count <= Self.maximumEncodedBytes else { throw ArchiveError.tooLarge }
         return candidate
@@ -257,7 +283,9 @@ public struct Archive: Codable, Sendable {
               sessions.count <= Self.maximumSessions,
               preferences.sessionMinutes >= 1, preferences.sessionMinutes <= 60 else { throw ArchiveError.invalid }
         func validDate(_ date: Date) -> Bool { date >= .distantPast && date <= .distantFuture }
+        try practice?.validate()
         for s in sessions {
+            guard s.practiceKind == nil || ["daily", "correction"].contains(s.practiceKind!) else { throw ArchiveError.invalid }
             guard LanguageRegistry.module(for: s.languageID) != nil else { throw ArchiveError.unsupportedLanguage }
             // These generous limits exceed a normal session while keeping UI conversions and totals safe.
             guard s.voiceSeconds.isFinite, (0...31_536_000).contains(s.voiceSeconds),
@@ -266,7 +294,7 @@ public struct Archive: Codable, Sendable {
                   s.assessments.allSatisfy({ validDate($0.createdAt) }) else { throw ArchiveError.invalid }
             guard Set(s.fragments.map(\.id)).count == s.fragments.count,
                   s.fragments.allSatisfy({ $0.startMS >= 0 && $0.endMS >= $0.startMS && $0.text.count <= 50_000 &&
-                      (0...1_000_000).contains($0.revision) && validDate($0.receivedAt) }),
+                      (0...Fragment.maximumRevision).contains($0.revision) && validDate($0.receivedAt) }),
                   s.topics.allSatisfy({ $0.languageID == s.languageID && validDate($0.retrievedAt) }) else { throw ArchiveError.invalid }
         }
     }
@@ -319,4 +347,126 @@ public enum MinuteBalanceTime {
         return value / 1_000 + (value % 1_000 == 0 ? 0 : 1)
     }
     public static func isEligible(_ milliseconds: Int) -> Bool { milliseconds > 0 }
+}
+
+/// Builds and writes a complete import before publishing it to the caller.
+public struct ArchiveImportTransaction {
+    public private(set) var archive: Archive
+    public init(archive: Archive) { self.archive = archive }
+    public mutating func importData(_ data: Data, write: (Data) throws -> Void) throws {
+        let candidate = try Self.candidate(from: data, mergingInto: archive)
+        try write(candidate.encoded())
+        archive = candidate
+    }
+    static func candidate(from data: Data, mergingInto archive: Archive) throws -> Archive {
+        var incoming = try Archive.decode(data)
+        for index in incoming.sessions.indices where incoming.sessions[index].endedAt == nil {
+            incoming.sessions[index].endedAt = Date()
+            incoming.sessions[index].endReason = "Imported unfinished conversation"
+        }
+        return try archive.merging(incoming)
+    }
+}
+
+/// Export a recoverable JSON object without leaking device-only work tickets.
+public enum ArchiveRecoveryExport {
+    public static func replacement(_ data: Data) throws -> Data {
+        try ArchiveImportTransaction.candidate(from: data, mergingInto: Archive()).encoded()
+    }
+
+    public enum Failure: LocalizedError {
+        case unsafePayload
+        public var errorDescription: String? { "The original record can’t be safely exported. It remains on this device." }
+    }
+    public static func sanitized(_ data: Data) throws -> Data {
+        guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { throw Failure.unsafePayload }
+        root.removeValue(forKey: "iosFinalAssessments")
+        return try JSONSerialization.data(withJSONObject: root)
+    }
+}
+
+/// Stages private files before committing archive deletion; abandoned staging is retried safely.
+public enum ArchiveDeletionTransaction {
+    public static func learningFiles(in root: URL) -> [URL] {
+        [root.appendingPathComponent("before-language-modules.json"),
+         root.appendingPathComponent("vocabulary-definitions-v1.json"),
+         root.appendingPathComponent("recovery-backups", isDirectory: true)]
+    }
+
+    public enum Failure: LocalizedError {
+        case rollbackFailed, cleanupPending
+        public var errorDescription: String? {
+            switch self {
+            case .rollbackFailed: "Some local files couldn’t be restored. Please try again."
+            case .cleanupPending: "Some local copies couldn’t be deleted. Please try again."
+            }
+        }
+    }
+    /// Restore interrupted staging before accessing side files. When a newer file already
+    /// occupies the path, keep the old copy privately until the user confirms deletion.
+    public static func recoverPending(files: [URL], stagingRoot: URL,
+                                      move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
+                                      remove: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) throws {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: stagingRoot.path) else { return }
+        for directory in try manager.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil) {
+            if manager.fileExists(atPath: directory.appendingPathComponent("committed").path) { continue }
+            do {
+                var hasConflict = false
+                for (index, original) in files.enumerated() {
+                    let staged = directory.appendingPathComponent(String(index))
+                    if manager.fileExists(atPath: staged.path) {
+                        if manager.fileExists(atPath: original.path) { hasConflict = true }
+                        else { try move(staged, original) }
+                    }
+                }
+                let marker = directory.appendingPathComponent("recovery-copy")
+                if hasConflict {
+                    if !manager.fileExists(atPath: marker.path) { try Data().write(to: marker, options: .atomic) }
+                } else if manager.fileExists(atPath: marker.path) { try remove(marker) }
+                if try manager.contentsOfDirectory(atPath: directory.path).isEmpty { try remove(directory) }
+            } catch { throw Failure.rollbackFailed }
+        }
+    }
+    public static func run(files: [URL], stagingRoot: URL,
+                           move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
+                           remove: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) },
+                           commit: () throws -> Void) throws {
+        let manager = FileManager.default
+        try manager.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
+        try recoverPending(files: files, stagingRoot: stagingRoot, move: move, remove: remove)
+        var retained: [URL] = []
+        for directory in try manager.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil) {
+            if manager.fileExists(atPath: directory.appendingPathComponent("committed").path) {
+                do { try remove(directory) } catch { throw Failure.cleanupPending }
+            } else { retained.append(directory) }
+        }
+        func restore(_ directory: URL) throws {
+            for (index, original) in files.enumerated() {
+                let staged = directory.appendingPathComponent(String(index))
+                if manager.fileExists(atPath: staged.path) {
+                    guard !manager.fileExists(atPath: original.path) else { throw Failure.rollbackFailed }
+                    try move(staged, original)
+                }
+            }
+            try remove(directory)
+        }
+        let directory = stagingRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try manager.createDirectory(at: directory, withIntermediateDirectories: false)
+        do {
+            for (index, original) in files.enumerated() where manager.fileExists(atPath: original.path) {
+                try move(original, directory.appendingPathComponent(String(index)))
+            }
+            try commit()
+        } catch {
+            let originalError = error
+            do { try restore(directory) } catch { throw Failure.rollbackFailed }
+            throw originalError
+        }
+        do {
+            let completed = [directory] + retained
+            for item in completed { try Data().write(to: item.appendingPathComponent("committed"), options: .atomic) }
+            for item in completed { try remove(item) }
+        } catch { throw Failure.cleanupPending }
+    }
 }

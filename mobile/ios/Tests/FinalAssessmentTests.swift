@@ -37,6 +37,66 @@ import XCTest
         XCTAssertTrue(condition(), file: file, line: line)
     }
 
+    func testRecoveryRequiresTicketConsentProviderAndUnchangedSource() throws {
+        var session = ended()
+        let now = session.endedAt!
+        var tickets = FinalAssessmentRecovery.enqueue(session, provider: "provider-a", tickets: [])
+        XCTAssertEqual(FinalAssessmentRecovery.recover([session], tickets: tickets, provider: "provider-a", consent: true, now: now).count, 1)
+        XCTAssertTrue(FinalAssessmentRecovery.recover([session], tickets: tickets, provider: "provider-b", consent: true, now: now).isEmpty)
+        XCTAssertTrue(FinalAssessmentRecovery.recover([session], tickets: tickets, provider: "provider-a", consent: false, now: now).isEmpty)
+        XCTAssertTrue(FinalAssessmentRecovery.recover([], tickets: tickets, provider: "provider-a", consent: true, now: now).isEmpty)
+        let original = session
+        session.correctFragment(id: session.fragments[0].id, text: "changed")
+        XCTAssertTrue(FinalAssessmentRecovery.recover([session], tickets: tickets, provider: "provider-a", consent: true, now: now).isEmpty)
+        XCTAssertTrue(FinalAssessmentRecovery.recover([original], tickets: tickets, provider: "provider-a", consent: true, now: now.addingTimeInterval(8 * 86400)).isEmpty)
+        XCTAssertEqual(tickets[0].terminalReason(at: now.addingTimeInterval(8 * 86400)), .expired)
+        tickets[0].attempts = 3
+        XCTAssertEqual(tickets[0].terminalReason(at: now), .exhausted)
+        XCTAssertTrue(FinalAssessmentRecovery.recover([original], tickets: tickets, provider: "provider-a", consent: true, now: now).isEmpty)
+    }
+
+    func testManualRetriesAfterAutomaticFailureRespectBothBudgets() async {
+        let sessions = [ended(), ended("fr")]
+        var tickets = sessions.reduce([FinalAssessmentTicket]()) { FinalAssessmentRecovery.enqueue($1, provider: "a", tickets: $0) }
+        var budget = ForegroundAssessmentBudget()
+        var calls = 0
+        let queue = FinalAssessmentQueue { _, _ in calls += 1; throw CancellationError() }
+        for (attempt, id) in [0, 0, 0, 1, 1, 1].enumerated() {
+            let record = sessions[id]
+            let pending: Set<UUID> = queue.isPending(record.id) ? [record.id] : []
+            let candidates = FinalAssessmentRecovery.recover([record], tickets: tickets, provider: "a", consent: true,
+                excluding: budget.excluding(pending: pending, manual: attempt > 0), limit: budget.remaining)
+            if let selected = candidates.first, queue.submit(selected) {
+                tickets[id].attempts += 1
+                budget.record(selected.id)
+                await waitUntil { !queue.isPending(selected.id) }
+            }
+            if attempt == 2 {
+                XCTAssertTrue(FinalAssessmentRecovery.recover([record], tickets: tickets, provider: "a", consent: true).isEmpty)
+            }
+        }
+        XCTAssertEqual(calls, 5)
+        XCTAssertEqual(tickets.map(\.attempts), [3, 2])
+        XCTAssertEqual(budget.remaining, 0)
+    }
+
+    func testRecoveryLimitsEachPassAndTicketRoundTrip() throws {
+        let sessions = (0..<7).map { _ in ended() }
+        let now = Date()
+        let tickets = sessions.reduce([FinalAssessmentTicket]()) { FinalAssessmentRecovery.enqueue($1, provider: "provider-a", tickets: $0) }
+        let restored = try JSONDecoder().decode([FinalAssessmentTicket].self, from: JSONEncoder().encode(tickets))
+        XCTAssertEqual(FinalAssessmentRecovery.recover(sessions, tickets: restored, provider: "provider-a", consent: true, now: now).count, 5)
+        XCTAssertTrue(FinalAssessmentRecovery.recover(sessions, tickets: [], provider: "provider-a", consent: true, now: now).isEmpty)
+    }
+
+    func testRecoveryExcludesProcessedBeforeApplyingLimit() {
+        let sessions = (0..<8).map { _ in ended() }
+        let tickets = sessions.reduce([FinalAssessmentTicket]()) { FinalAssessmentRecovery.enqueue($1, provider: "provider-a", tickets: $0) }
+        let selected = FinalAssessmentRecovery.recover(sessions, tickets: tickets, provider: "provider-a", consent: true,
+            now: Date(), excluding: Set(sessions.prefix(5).map(\.id)), limit: 2)
+        XCTAssertEqual(selected.map(\.id), sessions[5...6].map(\.id))
+    }
+
     func testResetAndNewLanguageDoNotRedirectResultsToTheNewSession() async {
         let old = ended(), new = ended("fr"), provider = Provider()
         var records = [old.id: old, new.id: new]

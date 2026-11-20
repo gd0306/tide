@@ -22,7 +22,7 @@ swift test --package-path mobile/ios
 xcodebuild -project mobile/ios/TideEnglish.xcodeproj -scheme TideEnglish -configuration Debug -sdk iphonesimulator -derivedDataPath .build/ios CODE_SIGNING_ALLOWED=NO build
 ```
 
-纯核心使用Swift6，模拟器应用部署目标iOS26.1。签名覆盖写在被忽略的Configuration/Local.xcconfig，不写进生成器。
+核心包使用 Swift 6 工具版本，iOS 应用当前使用 Swift 5 语言模式，应用最低系统为 iOS 26.1（不等同于核心包的 iOS 17 支持范围）。签名覆盖写在被忽略的Configuration/Local.xcconfig，不写进生成器。
 
 ## Android
 
@@ -54,3 +54,13 @@ npm test
 ```
 
 数据库测试需独立PostgreSQL测试库，使用TEST_DATABASE_URL。区分通过、跳过与未运行。示例商业配置不用于生产，不为构建启用托管或购买。
+
+## iOS 应用持续检查
+
+```sh
+python3 tools/generate_public_information.py --check
+python3 tools/generate_project.py
+python3 tools/run_ios_checks.py
+```
+
+需要 Apple Silicon Mac 和可用的 iOS 26.1+ 模拟器运行时。脚本创建并清理专用 iPhone 模拟器，只运行离线预览用例；没有签名或真实设备安装。CI 使用 macOS 26 / Xcode 26.4.1。`--test` 可重复指定新功能用例。它不验证真实语音、蓝牙、生产服务或商店签名。

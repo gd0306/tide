@@ -11,6 +11,14 @@ final class LearningTests: XCTestCase {
         s.assessments = [Assessment(passageID: p.id, revisionKey: p.revisionKey, outcome: .success, suggestedLevel: 2, nextGoal: "Fortell mer.", capability: "Describes a past outing", words: [WordProposal(lemma: "å gå", meaning: "to go", form: "gikk", kind: kind, confidence: 0.95, sourceIDs: p.fragments.map(\.id), quote: "Jeg gikk i skogen.")], createdAt: date, context: theme)]
         return s
     }
+    func testCorrectionSessionCannotAwardIndependentRecall() throws {
+        let data = try JSONEncoder().encode(fixture())
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        json["practiceKind"] = "correction"
+        let session = try JSONDecoder().decode(SessionRecord.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(LearningEngine.validate(session.assessments[0], session: session)?.words[0].kind, .assisted)
+        XCTAssertEqual(LearningEngine.project([session]).words[0].independentCount, 0)
+    }
     func testDuplicateProviderEventsDoNotChangeTranscript() {
         var s = SessionRecord()
         let f = Fragment(id: "same", speaker: .user, text: "Hei", startMS: 0, endMS: 100)

@@ -20,12 +20,12 @@ import androidx.compose.ui.unit.dp
 import cn.gd306.tideenglish.R
 
 internal const val DELETION_SUPPORT_EMAIL = "1215742191@qq.com"
-internal const val DELETION_SUPPORT_URL = "https://tide-english.example/support/#delete-account"
 // The draft intentionally includes no account identifiers, credentials or learning data.
 internal const val DELETION_SUPPORT_MAILTO = "mailto:1215742191@qq.com?subject=Tide%20account%20deletion%20request"
 
 @Composable
 internal fun AccountDeletionSupportDialog(onDismiss: () -> Unit) {
+    val showPublicInformation = rememberPublicInformationOpener()
     val uri = LocalUriHandler.current
     val clipboard = LocalClipboardManager.current
     var openingFailed by rememberSaveable { mutableStateOf(false) }
@@ -50,7 +50,7 @@ internal fun AccountDeletionSupportDialog(onDismiss: () -> Unit) {
                 if (openingFailed) Text(stringResource(R.string.account_deletion_open_failed), color = TideEnglishColors.Secondary,
                     modifier = Modifier.testTag("account-deletion-open-failed"))
                 TideEnglishTextButton(onClick = {
-                    openingFailed = runCatching { uri.openUri(DELETION_SUPPORT_URL) }.isFailure
+                    showPublicInformation(PublicInformationPage.SUPPORT)
                 }, modifier = Modifier.testTag("account-deletion-web")) {
                     Text(stringResource(R.string.account_deletion_web), color = TideEnglishColors.Ink)
                 }

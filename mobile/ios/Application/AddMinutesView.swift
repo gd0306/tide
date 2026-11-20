@@ -48,7 +48,11 @@ struct AddMinutesView: View {
                 Button("Check purchases") { Task { await purchases.checkPurchases(); await account.refreshAndWait() } }
                     .disabled(purchases.busy || account.session == nil).frame(minHeight: 44)
                     .accessibilityIdentifier("minute-check-purchases")
-                Text("Purchases are handled by Apple. [Terms of use](https://tide-english.example/terms/) · [Privacy policy](https://tide-english.example/privacy/)")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(InterfacePreferences.shared.language == .chinese ? "购买由 Apple 处理。" : "Purchases are handled by Apple.")
+                    PublicInformationLink(page: .terms)
+                    PublicInformationLink(page: .privacy)
+                }
                     .font(.footnote).foregroundStyle(TideEnglishColor.secondary)
             }.padding(24).frame(maxWidth: 520).frame(maxWidth: .infinity)
         }.background(TideEnglishColor.cream).foregroundStyle(TideEnglishColor.ink)

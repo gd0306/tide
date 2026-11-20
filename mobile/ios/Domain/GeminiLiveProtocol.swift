@@ -4,8 +4,11 @@ import CoreFoundation
 /// Pure Gemini Live wire validation and normalization. Contains no credentials or audio devices.
 public struct GeminiLiveProtocol {
     public static let maximumMessageBytes = 262_144
-    public static let socketURL = URL(string: "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained")!
-    public static let tokenURL = URL(string: "https://generativelanguage.googleapis.com/v1beta/auth_tokens")!
+    public static let model = "models/gemini-3.8-live"
+    private static let host = "generativelanguage.googleapis.com"
+    public static let baseURL = "https://" + host
+    public static let socketURL = URL(string: "wss://" + host + "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained")!
+    public static let tokenURL = URL(string: baseURL + "/v1beta/auth_tokens")!
     public enum Failure: Error, Equatable { case malformed, tooLarge, invalidAudio, credential, capability, authentication, billing, rateLimit, unavailable, unsafeResume }
     public struct Update {
         public var events: [[String: Any]] = []
@@ -73,7 +76,7 @@ public struct GeminiLiveProtocol {
     }
     public static func setup(instructions: String, hasHistory: Bool, resumeHandle: String? = nil) throws -> [String: Any] {
         guard instructions.utf8.count <= 65_536 else { throw Failure.tooLarge }
-        var setup: [String: Any] = ["model": "models/gemini-3.8-live", "generationConfig": ["responseModalities": ["AUDIO"]],
+        var setup: [String: Any] = ["model": Self.model, "generationConfig": ["responseModalities": ["AUDIO"]],
             "systemInstruction": ["parts": [["text": instructions]]], "inputAudioTranscription": [:], "outputAudioTranscription": [:],
             "sessionResumption": [:], "contextWindowCompression": ["slidingWindow": [:]],
             "realtimeInputConfig": ["automaticActivityDetection": ["disabled": false], "activityHandling": "START_OF_ACTIVITY_INTERRUPTS"]]

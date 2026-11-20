@@ -83,10 +83,13 @@ import cn.gd306.tideenglish.R
 import cn.gd306.tideenglish.core.SessionRecord
 import cn.gd306.tideenglish.core.Speaker
 import cn.gd306.tideenglish.core.ConversationProvider
+import cn.gd306.tideenglish.core.CorrectionSource
+import cn.gd306.tideenglish.core.DailyPracticePlan
+import cn.gd306.tideenglish.core.SavedExpression
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TalkScreen(
+internal fun TalkScreen(
     vm: TideEnglishViewModel,
     onOpenAdvanced: () -> Unit = {},
     onOpenAccount: () -> Unit = {},
@@ -96,6 +99,8 @@ fun TalkScreen(
     onSendTyped: (String) -> Unit,
     onLookup: (String, String) -> Unit,
     onHelp: () -> Unit,
+    onDailyPractice: (DailyPracticePlan) -> Unit,
+    onCheckCorrection: (CorrectionSource) -> Unit,
 ) {
     var typing by rememberSaveable { mutableStateOf(false) }
     var conversationChoice by rememberSaveable { mutableStateOf(false) }
@@ -106,6 +111,7 @@ fun TalkScreen(
     var lookupWord by rememberSaveable { mutableStateOf("") }
     var lookupSentence by rememberSaveable { mutableStateOf("") }
     var transcript by remember { mutableStateOf<SessionRecord?>(null) }
+    var dailyPreview by rememberSaveable { mutableStateOf(false) }
     val assistantPassage = vm.session?.passages?.lastOrNull { it.speaker == Speaker.assistant }
     val passage = assistantPassage?.text
     val caption = passage?.takeIf { it.isNotBlank() } ?: vm.language.greeting
@@ -117,7 +123,8 @@ fun TalkScreen(
     val meaningFollowing = FollowCaption(meaningScroll, assistantPassage?.id, vm.meaningCaptionFollowing) { vm.meaningCaptionFollowing = it }
 
     BoxWithConstraints(Modifier.fillMaxSize().testTag("talk-screen")) {
-    val scrollPage = LocalDensity.current.fontScale > 1.3f || maxHeight < 480.dp
+    val scrollPage = LocalDensity.current.fontScale > 1.3f ||
+        maxHeight < if (!vm.isRunning && !vm.hasContinuation) 520.dp else 480.dp
     val compact = !scrollPage && maxHeight < 620.dp
     val hasMandarinReading = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
         vm.language.id == "zh" && cn.gd306.tideenglish.core.MandarinPinyin.containsHan(caption)
@@ -144,10 +151,18 @@ fun TalkScreen(
     ) {
         Surface(color = TideEnglishColors.Butter.copy(alpha = .58f), shape = CircleShape) {
             Text(
-                vm.selectedTheme?.title ?: vm.language.talkTitle,
+                if (vm.session?.practiceKind == "correction" && vm.selectedTheme?.id == "correction")
+                    stringResource(R.string.practice_correction_rehearse)
+                else vm.selectedTheme?.title ?: vm.language.talkTitle,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = if (compact) 6.dp else 8.dp),
                 style = MaterialTheme.typography.labelMedium, color = TideEnglishColors.Secondary,
             )
+        }
+        if (!vm.isRunning && !vm.hasContinuation) {
+            TideEnglishTextButton({ dailyPreview = true },
+                Modifier.heightIn(min = 48.dp).testTag("daily-practice-open"), enabled = vm.canStartPractice) {
+                Text(stringResource(R.string.practice_daily))
+            }
         }
         Spacer(Modifier.height(if (compactReading) 4.dp else if (compact) 8.dp else 24.dp - 16.dp * readingSpace))
         TideEnglishOrb(
@@ -331,9 +346,18 @@ fun TalkScreen(
     }
     if (typing) TypedReplySheet(vm.language.name, vm.working, onSendTyped, onDismiss = { typing = false },
         error = vm.typedReplyError, completedSends = vm.typedRepliesSent, onOpen = { vm.clearTypedReplyError(); vm.noteTypingActivity() }, onTyping = vm::noteTypingActivity)
+    if (dailyPreview) {
+        val plan = DailyPracticePlan.make(vm.language.id, vm.learner.words)
+        val theme = plan?.let { selected -> vm.language.themes.firstOrNull { it.id == selected.themeID } }
+        if (plan != null && theme != null) DailyPracticeDialog(plan, theme, vm.canStartPractice,
+            onStart = { dailyPreview = false; onDailyPractice(plan) }, onDismiss = { dailyPreview = false })
+    }
     if (lookup) WordLookupSheet(lookupWord, lookupSentence, vm.language.id, vm.lookupResult, vm.lookupError, vm.lookupLoading,
-        onDismiss = { vm.clearLookup(); lookup = false; lookupWord = "" })
-    transcript?.let { TranscriptDialog(vm, it, onDismiss = { transcript = null }) }
+        onDismiss = { vm.clearLookup(); lookup = false; lookupWord = "" }, saveAction = {
+            SaveExpressionAction(vm, SavedExpression(languageID = vm.language.id, text = lookupWord,
+                meaning = vm.lookupResult.orEmpty(), context = lookupSentence))
+        })
+    transcript?.let { TranscriptDialog(vm, it, onDismiss = { transcript = null }, onCheckCorrection = onCheckCorrection) }
 }
 
 @Composable
