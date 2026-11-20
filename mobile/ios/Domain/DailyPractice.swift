@@ -67,7 +67,7 @@ public enum PracticeProviderMode {
     case live, fixture
 
     @MainActor public func response<Value>(purpose: String, fixture: (String) -> Value,
-                                           provider: () async throws -> Value) async throws -> Value {
+                                           provider: @MainActor () async throws -> Value) async throws -> Value {
         guard self == .fixture else { return try await provider() }
         switch purpose {
         case "typed_reply", "conversation": return fixture("Merci !")
