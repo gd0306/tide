@@ -19,6 +19,12 @@ internal data class CorrectionSource(
         catch (_: ArchiveError) { throw CorrectionFailure(CorrectionProblem.INPUT_LIMIT) }
     }
 
+    fun problem(archive: Archive): CorrectionProblem? = when {
+        archive.preferences.learningLanguageID != languageID -> CorrectionProblem.SOURCE_LANGUAGE
+        resolve(archive) == null -> CorrectionProblem.STALE
+        else -> null
+    }
+
     fun resolve(archive: Archive): Passage? = archive.sessions
         .firstOrNull { it.id == sessionID && it.languageID == languageID && it.endedAt != null }
         ?.passages?.firstOrNull {
@@ -26,7 +32,7 @@ internal data class CorrectionSource(
         }
 }
 
-internal enum class CorrectionProblem { STALE, INPUT_LIMIT, RESPONSE, REQUEST, PERSONAL_KEY, KEY_REQUIRED }
+internal enum class CorrectionProblem { STALE, INPUT_LIMIT, RESPONSE, REQUEST, PERSONAL_KEY, KEY_REQUIRED, SOURCE_LANGUAGE }
 
 internal sealed interface CorrectionState {
     val source: CorrectionSource
@@ -45,8 +51,11 @@ internal suspend fun requestPracticeCorrection(
     current: () -> Archive?,
     respond: suspend () -> PracticeCorrectionResult,
 ): SavedCorrection? {
-    fun supportedArchive(): Archive = current()?.takeIf { source.resolve(it) != null }
-        ?: throw CorrectionFailure(CorrectionProblem.STALE)
+    fun supportedArchive(): Archive {
+        val archive = current() ?: throw CorrectionFailure(CorrectionProblem.STALE)
+        source.problem(archive)?.let { throw CorrectionFailure(it) }
+        return archive
+    }
     supportedArchive()
     source.checkInput()
     val result = respond()
@@ -66,6 +75,35 @@ internal fun Archive.withPracticeSources(sessions: MutableList<SessionRecord>): 
         if (practice == null) candidate
         else candidate.editPractice { it.invalidateCorrections(sessions) }
     }
+
+internal class HistoryRevisionLimit : Exception()
+
+internal fun Archive.reviseHistoryPassage(sessionID: String, passageID: String, expectedRevision: String, text: String): Archive {
+    val index = sessions.indexOfFirst { it.id == sessionID }
+    if (index < 0) throw CorrectionFailure(CorrectionProblem.STALE)
+    val original = sessions[index]
+    val passage = original.passages.firstOrNull {
+        it.id == passageID && it.speaker == Speaker.user && it.revisionKey == expectedRevision
+    } ?: throw CorrectionFailure(CorrectionProblem.STALE)
+    if (passage.fragments.any { !it.canRevise }) throw HistoryRevisionLimit()
+    val record = original.copy(fragments = original.fragments.toMutableList(),
+        assessments = original.assessments.toMutableList(), translations = original.translations.toMutableMap())
+    passage.fragments.forEachIndexed { offset, fragment ->
+        record.correctFragment(fragment.id, if (offset == 0) text.take(10_000) else "")
+    }
+    val updated = sessions.toMutableList()
+    updated[index] = record
+    return withPracticeSources(updated)
+}
+
+internal suspend fun translateForPractice(
+    request: QuickTranslationRequest,
+    offlineFixture: Boolean,
+    provider: suspend (QuickTranslationRequest) -> String,
+): String {
+    if (offlineFixture) return if (request.targetLanguage == "Chinese (Simplified)") "你好！" else "Hello!"
+    return provider(request)
+}
 
 internal fun SessionRecord.cachedPracticeTranslation(passage: Passage, meaningLanguage: String): String? =
     (translations[MeaningRequest.cacheKey(passage.revisionKey, meaningLanguage)]

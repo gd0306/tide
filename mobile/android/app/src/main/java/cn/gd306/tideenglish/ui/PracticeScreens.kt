@@ -226,6 +226,7 @@ internal fun PracticeCorrectionDialog(state: CorrectionState, running: Boolean, 
                     CorrectionProblem.REQUEST -> R.string.practice_correction_request
                     CorrectionProblem.PERSONAL_KEY -> R.string.practice_correction_personal_key
                     CorrectionProblem.KEY_REQUIRED -> R.string.error_missing_key
+                    CorrectionProblem.SOURCE_LANGUAGE -> R.string.practice_correction_source_language
                 })
                 when (state.problem) {
                     CorrectionProblem.REQUEST, CorrectionProblem.RESPONSE -> PracticeButton(R.string.practice_correction_retry, onRetry, "retry-correction", enabled = !running)

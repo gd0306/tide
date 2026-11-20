@@ -18,7 +18,13 @@ data class Fragment(
     var previousTexts: List<String> = emptyList(), val speaker: Speaker, var text: String,
     val startMS: Int, val endMS: Int, val receivedAt: Double = nowSeconds(),
     val meaningVisible: Boolean = false, val typed: Boolean = false
-)
+) {
+    internal val canRevise get() = revision < MAXIMUM_REVISION
+
+    companion object {
+        internal const val MAXIMUM_REVISION = 1_000_000
+    }
+}
 
 data class Passage(val id: String, val speaker: Speaker, val fragments: List<Fragment>) {
     val text get() = join(fragments.map { it.text })
@@ -132,7 +138,9 @@ data class SessionRecord(
     fun invalidateChangedAssessments() { val current = passages.associate { it.id to it.revisionKey }; assessments.removeAll { current[it.passageID] != it.revisionKey } }
     fun correctFragment(id: String, text: String) {
         val i = fragments.indexOfFirst { it.id == id }; if (i < 0) return
-        val f = fragments[i]; fragments[i] = f.copy(previousTexts = f.previousTexts + f.text, text = text, revision = f.revision + 1)
+        val f = fragments[i]
+        if (!f.canRevise) return
+        fragments[i] = f.copy(previousTexts = f.previousTexts + f.text, text = text, revision = f.revision + 1)
         translations.keys.filter { translationKeyIncludesFragment(it, id) }.forEach { translations.remove(it) }
         invalidateChangedAssessments()
     }
@@ -267,7 +275,7 @@ object ArchiveCodec {
             if (s.practiceKind != null && s.practiceKind !in listOf("daily", "correction")) throw ArchiveError.INVALID
             if (LanguageRegistry.get(s.languageID) == null) throw ArchiveError.UNSUPPORTED_LANGUAGE
             if (!validUUID(s.id) || !s.voiceSeconds.isFinite() || s.voiceSeconds !in 0.0..31536000.0 || listOf(s.inputTokens,s.outputTokens,s.searchCalls).any { it !in 0..1_000_000_000 } || !validDate(s.startedAt) || s.endedAt?.let { !validDate(it) } == true) throw ArchiveError.INVALID
-            if (s.fragments.map { it.id }.toSet().size != s.fragments.size || s.fragments.any { it.startMS < 0 || it.endMS < it.startMS || it.text.length > 50000 || it.revision !in 0..1_000_000 || !validDate(it.receivedAt) }) throw ArchiveError.INVALID
+            if (s.fragments.map { it.id }.toSet().size != s.fragments.size || s.fragments.any { it.startMS < 0 || it.endMS < it.startMS || it.text.length > 50000 || it.revision !in 0..Fragment.MAXIMUM_REVISION || !validDate(it.receivedAt) }) throw ArchiveError.INVALID
             if (s.assessments.any { !validDate(it.createdAt) } || s.topics.any { !validUUID(it.id) || it.languageID != s.languageID || !validDate(it.retrievedAt) }) throw ArchiveError.INVALID
         }
     }

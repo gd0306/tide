@@ -5,6 +5,9 @@ public enum EvidenceKind: String, Codable, Sendable { case exposure, understandi
 public enum Outcome: String, Codable, Sendable { case success, partial, breakdown, uncertain }
 
 public struct Fragment: Codable, Identifiable, Equatable, Sendable {
+    static let maximumRevision = 1_000_000
+    var canRevise: Bool { revision < Self.maximumRevision }
+
     public var id: String
     public var revision: Int = 0
     public var previousTexts: [String] = []
@@ -181,7 +184,7 @@ public struct SessionRecord: Codable, Identifiable, Sendable {
         assessments.removeAll { current[$0.passageID] != $0.revisionKey }
     }
     public mutating func correctFragment(id: String, text: String) {
-        guard let index = fragments.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = fragments.firstIndex(where: { $0.id == id }), fragments[index].canRevise else { return }
         fragments[index].previousTexts.append(fragments[index].text)
         fragments[index].text = text; fragments[index].revision += 1
         translations = translations.filter { !Self.translationKey($0.key, includesFragment: id) }
@@ -207,6 +210,8 @@ public struct Preferences: Codable, Sendable {
     public init() {}
 }
 
+public enum HistoryEditError: Error, Equatable { case revisionLimit }
+
 public struct Archive: Codable, Sendable {
     public static let maximumEncodedBytes = 30_000_000
     private static let maximumSessions = 10_000
@@ -215,6 +220,19 @@ public struct Archive: Codable, Sendable {
     public var preferences = Preferences()
     public var practice: PracticeLibrary?
     public init() {}
+    /// Applies an edit to the selected user passage and invalidates corrections tied to old revisions.
+    public mutating func reviseHistoryPassage(sessionID: UUID, passageID: String, text: String) throws -> Bool {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionID }),
+              sessions[index].endedAt != nil,
+              let passage = sessions[index].passages.first(where: { $0.id == passageID && $0.speaker == .user }) else { return false }
+        guard passage.fragments.allSatisfy(\.canRevise) else { throw HistoryEditError.revisionLimit }
+        for (offset, fragment) in passage.fragments.enumerated() {
+            sessions[index].correctFragment(id: fragment.id, text: offset == 0 ? String(text.prefix(10_000)) : "")
+        }
+        practice?.invalidateCorrections(sessions: sessions)
+        return true
+    }
+
     public static func decode(_ data: Data) throws -> Archive {
         guard data.count <= maximumEncodedBytes else { throw ArchiveError.tooLarge }
         let migrated = try migrate(data)
@@ -276,7 +294,7 @@ public struct Archive: Codable, Sendable {
                   s.assessments.allSatisfy({ validDate($0.createdAt) }) else { throw ArchiveError.invalid }
             guard Set(s.fragments.map(\.id)).count == s.fragments.count,
                   s.fragments.allSatisfy({ $0.startMS >= 0 && $0.endMS >= $0.startMS && $0.text.count <= 50_000 &&
-                      (0...1_000_000).contains($0.revision) && validDate($0.receivedAt) }),
+                      (0...Fragment.maximumRevision).contains($0.revision) && validDate($0.receivedAt) }),
                   s.topics.allSatisfy({ $0.languageID == s.languageID && validDate($0.retrievedAt) }) else { throw ArchiveError.invalid }
         }
     }

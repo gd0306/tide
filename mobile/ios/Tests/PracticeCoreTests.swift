@@ -12,6 +12,39 @@ final class PracticeCoreTests: XCTestCase {
         }
         XCTAssertEqual(archive.preferences.sessionMinutes, 25)
     }
+    func testHistoryEditRejectsLimitOnSecondFragmentAndKeepsArchiveReadable() throws {
+        var session = SessionRecord(languageID: "fr")
+        session.endedAt = .now
+        var first = Fragment(id: "first", speaker: .user, text: "Je aller", startMS: 0, endMS: 100)
+        first.revision = 8
+        var last = Fragment(id: "last", speaker: .user, text: " hier.", startMS: 110, endMS: 200)
+        last.revision = 1_000_000
+        session.append(first); session.append(last)
+        let passage = try XCTUnwrap(session.passages.first)
+        XCTAssertEqual(passage.fragments.count, 2)
+        let correction = SavedCorrection(languageID: "fr", original: passage.text, corrected: "Je suis allé hier.",
+            explanation: "Use the past tense.", sourceSessionID: session.id, sourcePassageID: passage.id, revisionKey: passage.revisionKey)
+        var archive = Archive()
+        archive.sessions = [session]
+        archive.practice = PracticeLibrary(corrections: [correction])
+        XCTAssertThrowsError(try archive.reviseHistoryPassage(sessionID: session.id, passageID: passage.id, text: "Je suis allé hier.")) {
+            XCTAssertEqual($0 as? HistoryEditError, .revisionLimit)
+        }
+        XCTAssertEqual(archive.sessions[0].fragments, [first, last])
+        XCTAssertEqual(archive.practice?.corrections.map(\.id), [correction.id])
+        let decoded = try Archive.decode(archive.encoded())
+        XCTAssertEqual(decoded.sessions[0].fragments.map(\.revision), [8, 1_000_000])
+        XCTAssertEqual(decoded.sessions[0].passages.first?.text, passage.text)
+        XCTAssertEqual(decoded.practice?.corrections.map(\.id), [correction.id])
+
+        archive.sessions[0].fragments[1].revision -= 1
+        XCTAssertTrue(try archive.reviseHistoryPassage(sessionID: session.id, passageID: passage.id, text: "Je suis allé hier."))
+        let updated = try Archive.decode(archive.encoded())
+        XCTAssertEqual(updated.sessions[0].fragments.map(\.revision), [9, 1_000_000])
+        XCTAssertEqual(updated.sessions[0].passages.first?.text, "Je suis allé hier.")
+        XCTAssertTrue(updated.practice?.corrections.isEmpty == true)
+    }
+
     func testHistoryTranslationUsesCurrentRevisionAndSupportsOldCaches() {
         var session = SessionRecord(languageID: "fr")
         session.append(Fragment(id: "p", speaker: .user, text: "Je vais hier.", startMS: 0, endMS: 1))

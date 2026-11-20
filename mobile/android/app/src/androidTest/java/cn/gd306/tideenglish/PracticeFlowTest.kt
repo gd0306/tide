@@ -106,10 +106,34 @@ class PracticeFlowTest {
         compose.onNodeWithTag("typed-reply-send").performScrollTo().performClick()
         compose.runOnIdle {
             assertEquals("Merci pour le café.", vm.session!!.passages.first { it.speaker == Speaker.user }.text)
+        }
+        compose.onNodeWithTag("tab-words").performClick()
+        compose.onNodeWithTag("words-screen").performScrollToNode(hasTestTag("translation-toggle"))
+        compose.onNodeWithTag("translation-toggle").performClick()
+        compose.onNodeWithTag("words-screen").performScrollToNode(hasTestTag("translation-input"))
+        compose.onNodeWithTag("translation-input").performTextInput("Bonjour")
+        compose.onNodeWithTag("translation-output").assertDoesNotExist()
+        compose.runOnIdle {
             vm.end()
             assertEquals("daily", vm.archive.sessions.first { it.id == vm.session!!.id }.practiceKind)
             assertEquals(0, vm.session!!.assessments.size)
         }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("translation-output").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("translation-output").assertTextContains("Hello!")
+    }
+
+    @Test fun historyFromAnotherLanguageShowsWhySentenceCheckIsUnavailable() {
+        compose.runOnIdle {
+            vm.selectLanguage("en")
+            vm.saveKey("synthetic-practice-key")
+            vm.updatePreferences(vm.archive.preferences.copy(aiConsentVersion = 1))
+        }
+        openHistory()
+        compose.onNodeWithTag("settings-history-list").performScrollToNode(hasText(history.title))
+        compose.onNodeWithText(history.title).performClick()
+        compose.onNodeWithText("Switch to the language of this conversation to check its sentences.").assertExists()
+        compose.onNodeWithTag("check-correction-${history.passages.single().id}").performScrollTo().assertIsNotEnabled()
+        compose.runOnIdle { assertEquals(0, correctionCalls) }
     }
 
     @Test fun cacheSearchExplicitSaveRetryAndRehearsalUseTheRealScreens() {

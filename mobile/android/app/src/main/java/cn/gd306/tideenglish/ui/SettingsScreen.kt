@@ -355,6 +355,7 @@ internal fun TranscriptDialog(vm: TideEnglishViewModel, session: SessionRecord, 
         return
     }
     val meaning = vm.archive.preferences.meaningLanguage
+    val sourceLanguageSelected = liveSession.languageID == vm.language.id
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(28.dp), color = TideEnglishColors.Surface) {
             Column(Modifier.padding(vertical = 12.dp).testTag("history-transcript")) {
@@ -363,6 +364,10 @@ internal fun TranscriptDialog(vm: TideEnglishViewModel, session: SessionRecord, 
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     item {
                         Text("${formatDate(liveSession.startedAt)} · ${pluralStringResource(R.plurals.history_passages_count, liveSession.passages.size, liveSession.passages.size)}", color = TideEnglishColors.Secondary)
+                        if (!sourceLanguageSelected && liveSession.endedAt != null && liveSession.passages.any { it.speaker == Speaker.user }) {
+                            Text(stringResource(R.string.practice_correction_source_language), color = TideEnglishColors.Secondary,
+                                modifier = Modifier.padding(top = 8.dp))
+                        }
                     }
                     items(liveSession.passages, key = { it.id }) { passage ->
                         Column(
@@ -396,7 +401,7 @@ internal fun TranscriptDialog(vm: TideEnglishViewModel, session: SessionRecord, 
                                     PracticeButton(R.string.practice_check_correction, onClick = {
                                         onCheckCorrection(CorrectionSource(liveSession.id, passage.id, passage.revisionKey,
                                             passage.text, liveSession.languageID))
-                                    }, tag = "check-correction-${passage.id}", enabled = !vm.isRunning)
+                                    }, tag = "check-correction-${passage.id}", enabled = sourceLanguageSelected && !vm.isRunning)
                                 }
                             }
                             if (passage.speaker == Speaker.user) PracticeButton(R.string.history_edit_passage_button,

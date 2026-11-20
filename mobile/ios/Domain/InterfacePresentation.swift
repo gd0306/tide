@@ -147,6 +147,7 @@ public enum InterfaceText {
         "Recalled across days and contexts. Strength can fade with time.": "已在不同日期和情境中回忆出来。熟练程度可能随时间减弱。",
         // Exact app-authored recovery copy; provider/system payloads still fall through.
         "Tide couldn’t delete the older learning backup. Your conversations are still here. Please try again.": "潮语 无法删除旧的学习备份。你的对话仍然保留。请重试。",
+        "This passage has reached its edit limit.": "这段话已达到编辑次数上限。",
         "Tide couldn’t save your progress. Please export a backup and try again.": "潮语 无法保存你的进度。请导出备份后重试。",
         "Enter a valid API key.": "请输入有效的 API 密钥。",
         "The key couldn’t be saved to this device’s Keychain.": "无法将密钥保存到此设备的钥匙串。",

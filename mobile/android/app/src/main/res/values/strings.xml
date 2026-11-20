@@ -283,4 +283,6 @@
     <string name="practice_delete_item">Delete this item?</string>
     <string name="practice_model_chat_explanation">The chat model handles text replies, translations, vocabulary help and sentence checks. Native realtime voice uses a separate audio model when your provider supports it. Saving settings does not send a test request.</string>
     <string name="practice_model_voice_explanation">If native access is unavailable, the selected provider can use device speech recognition and playback. DeepSeek and Custom use device speech.</string>
+    <string name="history_edit_revision_limit">This passage has reached its edit limit.</string>
+    <string name="practice_correction_source_language">Switch to the language of this conversation to check its sentences.</string>
 </resources>

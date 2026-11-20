@@ -914,7 +914,6 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
     private data class CorrectionAttempt(
         val source: CorrectionSource,
         val configuration: ProviderConfiguration,
-        val learningLanguage: String,
         val meaningLanguage: String,
     )
 
@@ -922,14 +921,13 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         current.takeIf {
             correctionAttempt === attempt && storageReady && inForeground && !isRunning && hasScopedConsent() &&
                 hasKey && conversationProvider == ConversationProvider.PERSONAL_KEY &&
-                modelConfiguration == attempt.configuration && it.preferences.learningLanguageID == attempt.learningLanguage &&
-                it.preferences.meaningLanguage == attempt.meaningLanguage
+                modelConfiguration == attempt.configuration && it.preferences.meaningLanguage == attempt.meaningLanguage
         }
 
     private fun invalidatePracticeSelection() {
-        if (correctionState?.source?.let { it.resolve(archive) == null } == true) dismissCorrection()
+        if (correctionState?.source?.let { it.problem(archive) != null } == true) dismissCorrection()
         val action = pendingCloudAction as? CloudAction.RequestCorrection
-        if (action?.source?.let { it.resolve(archive) == null } == true) pendingCloudAction = null
+        if (action?.source?.let { it.problem(archive) != null } == true) pendingCloudAction = null
         if (pendingPractice?.theme(language, archive) == null) cancelPractice()
     }
 
@@ -944,8 +942,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         dismissCorrection()
         if (!inForeground || !storageReady || isRunning) return
         val module = LanguageRegistry.get(source.languageID) ?: return
-        val problem = when {
-            source.resolve(archive) == null -> CorrectionProblem.STALE
+        val problem = source.problem(archive) ?: when {
             conversationProvider != ConversationProvider.PERSONAL_KEY -> CorrectionProblem.PERSONAL_KEY
             !hasScopedConsent() -> return
             !hasKey -> CorrectionProblem.KEY_REQUIRED
@@ -955,7 +952,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
             correctionState = CorrectionState.Failure(source, problem)
             return
         }
-        val attempt = CorrectionAttempt(source, modelConfiguration, language.id, archive.preferences.meaningLanguage)
+        val attempt = CorrectionAttempt(source, modelConfiguration, archive.preferences.meaningLanguage)
         correctionAttempt = attempt
         correctionState = CorrectionState.Checking(source)
         correctionJob = viewModelScope.launch {
@@ -995,13 +992,13 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         val state = correctionState as? CorrectionState.Answer ?: return
         val correction = state.correction ?: return
         val attempt = correctionAttempt ?: return
-        if (state.saving || state.saved || correctionArchive(attempt) == null || state.source.resolve(archive) == null) return
+        if (state.saving || state.saved || correctionArchive(attempt) == null || attempt.source.problem(archive) != null) return
         correctionState = state.copy(saving = true, storageFailed = false)
         viewModelScope.launch {
             try {
                 writes.mutate(mutation = { current ->
-                    val matching = correctionArchive(attempt, current.archive)
-                        ?.takeIf { state.source.resolve(it) != null } ?: throw CorrectionFailure(CorrectionProblem.STALE)
+                    val matching = correctionArchive(attempt, current.archive) ?: throw CorrectionFailure(CorrectionProblem.STALE)
+                    attempt.source.problem(matching)?.let { throw CorrectionFailure(it) }
                     current.copy(archive = matching.editPractice {
                         if (!it.saveCorrection(correction, matching.sessions)) throw CorrectionFailure(CorrectionProblem.STALE)
                     })
@@ -1555,10 +1552,10 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         require(request.isValid)
         val selected = modelConfiguration
         val token = generation
-        val result = api.quickTranslate(request)
+        val result = translateForPractice(request, offlinePracticeFixture != null) { api.quickTranslate(it).text }
         if (token != generation || modelConfiguration != selected || archive.preferences.aiConsentVersion != 1 ||
             conversationProvider != ConversationProvider.PERSONAL_KEY || isRunning) throw CancellationException("Translation context changed")
-        return result.text
+        return result
     }
     suspend fun fetchVocabularyDefinition(word: String, learningLanguage: String, meaningLanguage: String): VocabularyDefinition {
         check(cloudReady() && !isRunning)
@@ -1637,14 +1634,9 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         if (isRunning || !storageReady) return
         try {
             writes.mutate(mutation = { current ->
-                val record = current.archive.sessions.firstOrNull { it.id == sessionID }?.let(::clone)
-                    ?: throw CorrectionFailure(CorrectionProblem.STALE)
-                val passage = record.passages.firstOrNull {
-                    it.id == passageID && it.speaker == Speaker.user && it.revisionKey == expectedRevision
-                } ?: throw CorrectionFailure(CorrectionProblem.STALE)
-                passage.fragments.forEachIndexed { index, f -> record.correctFragment(f.id, if (index == 0) text.take(10000) else "") }
-                val records = current.archive.sessions.map { if (it.id == record.id) record else it }.toMutableList()
-                current.copy(archive = current.archive.withPracticeSources(records), finalAssessments =
+                val updated = current.archive.reviseHistoryPassage(sessionID, passageID, expectedRevision, text)
+                val record = updated.sessions.first { it.id == sessionID }
+                current.copy(archive = updated, finalAssessments =
                     if (offlinePracticeFixture != null) current.finalAssessments
                     else ConversationProviderPolicy.enqueueRecovery(record, current.finalAssessments, hostedSessionIDs))
             }, onCommit = {
@@ -1655,7 +1647,8 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
                 if (session?.id == sessionID) session = archive.sessions.firstOrNull { it.id == sessionID }?.let(::clone)
             })
         } catch (error: CancellationException) { throw error }
-        catch (error: CorrectionFailure) { presentError(localizedContext().getString(R.string.practice_correction_stale)) }
+        catch (_: HistoryRevisionLimit) { presentError(localizedContext().getString(R.string.history_edit_revision_limit)) }
+        catch (_: CorrectionFailure) { presentError(localizedContext().getString(R.string.practice_correction_stale)) }
         catch (_: Exception) { presentError(localizedContext().getString(R.string.error_save_progress_failed)) }
     }
     suspend fun deleteLearningData() {

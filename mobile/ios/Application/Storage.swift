@@ -111,17 +111,15 @@ import TideEnglishCore
     func hideWord(_ id: String) { archive.preferences.hiddenWords.append(id); persist() }
     func correctPassage(sessionID: UUID, passageID: String, text: String) {
         var candidate = archive
-        guard let index = candidate.sessions.firstIndex(where: { $0.id == sessionID }),
-              candidate.sessions[index].endedAt != nil,
-              let passage = candidate.sessions[index].passages.first(where: { $0.id == passageID && $0.speaker == .user }) else { return }
-        for (offset, fragment) in passage.fragments.enumerated() {
-            candidate.sessions[index].correctFragment(id: fragment.id, text: offset == 0 ? String(text.prefix(10_000)) : "")
-        }
-        candidate.practice?.invalidateCorrections(sessions: candidate.sessions)
         do {
+            guard try candidate.reviseHistoryPassage(sessionID: sessionID, passageID: passageID, text: text) else { return }
             try commit(candidate, tickets: finalAssessmentTickets.filter { $0.sessionID != sessionID })
             onSessionInvalidation?(sessionID)
-        } catch { self.error = "Tide couldn’t save your progress. Please export a backup and try again." }
+        } catch HistoryEditError.revisionLimit {
+            self.error = "This passage has reached its edit limit."
+        } catch {
+            self.error = "Tide couldn’t save your progress. Please export a backup and try again."
+        }
     }
     var practice: PracticeLibrary { archive.practice ?? PracticeLibrary() }
     func saveExpression(_ value: SavedExpression) throws -> Bool {

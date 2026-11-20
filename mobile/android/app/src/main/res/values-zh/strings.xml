@@ -455,4 +455,6 @@
     <string name="practice_delete_item">删除这一条？</string>
     <string name="practice_model_chat_explanation">聊天模型处理文字回复、翻译、词汇释义和句子检查。服务商支持原生实时语音时，会使用独立的音频模型。保存设置时不会发送测试请求。</string>
     <string name="practice_model_voice_explanation">原生实时语音不可用时，所选服务商可以配合设备语音识别和朗读。DeepSeek 和自定义服务使用设备语音。</string>
+    <string name="history_edit_revision_limit">这段话已达到编辑次数上限。</string>
+    <string name="practice_correction_source_language">请切换到这场会话的学习语言，再检查其中的句子。</string>
 </resources>

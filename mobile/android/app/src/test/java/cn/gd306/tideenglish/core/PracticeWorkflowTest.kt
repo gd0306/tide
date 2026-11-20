@@ -185,11 +185,71 @@ class PracticeWorkflowTest {
         }
     }
 
-    private fun history(text: String): Pair<Archive, CorrectionSource> {
-        val session = SessionRecord(languageID = "es", endedAt = nowSeconds())
+    @Test fun revisionLimitOnAnyFragmentRejectsWholeHistoryEdit() {
+        val session = SessionRecord(languageID = "es", endedAt = nowSeconds()).apply {
+            append(Fragment(revision = 8, speaker = Speaker.user, text = "Yo querer", startMS = 0, endMS = 100))
+            append(Fragment(revision = 1_000_000, speaker = Speaker.user, text = " té.", startMS = 110, endMS = 200))
+        }
+        val passage = session.passages.single()
+        assertEquals(2, passage.fragments.size)
+        val correction = SavedCorrection(languageID = "es", original = passage.text, corrected = "Yo quiero té.",
+            explanation = "Conjugate the verb.", sourceSessionID = session.id, sourcePassageID = passage.id, revisionKey = passage.revisionKey)
+        val original = Archive(sessions = mutableListOf(session), practice = PracticeLibrary(corrections = mutableListOf(correction)))
+        val encoded = ArchiveCodec.encode(original)
+        assertThrows(HistoryRevisionLimit::class.java) {
+            original.reviseHistoryPassage(session.id, passage.id, passage.revisionKey, "Yo quiero té.")
+        }
+        assertEquals(encoded, ArchiveCodec.encode(original))
+        val decoded = ArchiveCodec.decode(encoded)
+        assertEquals(listOf(8, 1_000_000), decoded.sessions.single().fragments.map { it.revision })
+        assertEquals(passage.text, decoded.sessions.single().passages.single().text)
+        assertEquals(listOf(correction), decoded.practice!!.corrections)
+
+        val editable = session.copy(fragments = session.fragments.toMutableList().apply {
+            this[1] = this[1].copy(revision = 999_999)
+        })
+        val editablePassage = editable.passages.single()
+        val updated = original.copy(sessions = mutableListOf(editable))
+            .reviseHistoryPassage(session.id, editablePassage.id, editablePassage.revisionKey, "Yo quiero té.")
+        val reloaded = ArchiveCodec.decode(ArchiveCodec.encode(updated))
+        assertEquals(listOf(9, 1_000_000), reloaded.sessions.single().fragments.map { it.revision })
+        assertEquals("Yo quiero té.", reloaded.sessions.single().passages.single().text)
+        assertTrue(reloaded.practice!!.corrections.isEmpty())
+    }
+
+    @Test fun correctionNeedsTheSourceLanguageBeforeAnyProviderCall() = runTest {
+        val (french, source) = history("Je aller hier.", languageID = "fr")
+        var selected = french.copy(preferences = french.preferences.copy(learningLanguageID = "en"))
+        var calls = 0
+        val provider: suspend () -> PracticeCorrectionResult = {
+            calls++
+            PracticeCorrectionResult(true, "Je suis allé hier.", "Use the past tense.")
+        }
+        val failure = runCatching { requestPracticeCorrection(source, { selected }, provider) }.exceptionOrNull() as? CorrectionFailure
+        assertEquals(0, calls)
+        assertEquals(CorrectionProblem.SOURCE_LANGUAGE, failure?.problem)
+        selected = french
+        assertEquals("Je suis allé hier.", requestPracticeCorrection(source, { selected }, provider)?.corrected)
+        assertEquals(1, calls)
+    }
+
+    @Test fun correctionResponseIsDiscardedIfTheLearningLanguageChanges() = runTest {
+        val (french, source) = history("Je aller hier.", languageID = "fr")
+        var selected = french
+        val failure = runCatching {
+            requestPracticeCorrection(source, { selected }) {
+                selected = french.copy(preferences = french.preferences.copy(learningLanguageID = "en"))
+                PracticeCorrectionResult(true, "Je suis allé hier.", "Use the past tense.")
+            }
+        }.exceptionOrNull() as? CorrectionFailure
+        assertEquals(CorrectionProblem.SOURCE_LANGUAGE, failure?.problem)
+    }
+
+    private fun history(text: String, languageID: String = "es"): Pair<Archive, CorrectionSource> {
+        val session = SessionRecord(languageID = languageID, endedAt = nowSeconds())
         session.append(Fragment(speaker = Speaker.user, text = text, startMS = 0, endMS = 10))
         val passage = session.passages.single()
-        return Archive(sessions = mutableListOf(session)) to
+        return Archive(sessions = mutableListOf(session), preferences = Preferences(learningLanguageID = languageID)) to
             CorrectionSource(session.id, passage.id, passage.revisionKey, passage.text, session.languageID)
     }
 }

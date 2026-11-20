@@ -283,4 +283,6 @@
     <string name="practice_delete_item">¿Eliminar este elemento?</string>
     <string name="practice_model_chat_explanation">El modelo de chat genera respuestas de texto y traducciones, explica el vocabulario y revisa frases. La voz nativa en tiempo real usa un modelo de audio independiente si el proveedor lo admite. Guardar la configuración no envía ninguna solicitud de prueba.</string>
     <string name="practice_model_voice_explanation">Si la voz nativa no está disponible, el proveedor seleccionado puede utilizar el reconocimiento y la reproducción de voz del dispositivo. DeepSeek y Custom usan la voz del dispositivo.</string>
+    <string name="history_edit_revision_limit">Este fragmento ha alcanzado su límite de ediciones.</string>
+    <string name="practice_correction_source_language">Cambia al idioma de esta conversación para revisar sus frases.</string>
 </resources>

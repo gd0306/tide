@@ -116,9 +116,10 @@ internal class LearningWriteQueue(
                     pending.forEach { it.completion?.complete(Unit) }
                 } catch (error: Exception) {
                     request.completion?.completeExceptionally(error)
-                    val latest = pending.lastOrNull()?.snapshot
-                    if (latest != null) {
-                        try { writeCritical(latest); pending.forEach { it.completion?.complete(Unit) } }
+                    if (pending.isNotEmpty()) {
+                        // A pending snapshot may predate a successful earlier barrier. Its
+                        // ordinary changes are already in current(), which also has that commit.
+                        try { writeCritical(current()); pending.forEach { it.completion?.complete(Unit) } }
                         catch (failure: Exception) { pending.forEach { it.completion?.completeExceptionally(failure) } }
                     }
                 }

@@ -23,6 +23,27 @@ class ProviderTeachingClientTest {
   assertEquals(0,requests)
   assertEquals(0,keyReads)
  }
+ @Test fun endedPracticeFixtureQuickTranslationNeverReadsKeyOrEntersHttp() = runBlocking {
+  var keyReads = 0
+  var requests = 0
+  val http = OkHttpClient.Builder().addInterceptor { chain ->
+   requests++
+   val body = """{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"Live translation"}}]}"""
+   Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+    .code(200).message("OK").body(body.toResponseBody()).build()
+  }.build()
+  val client = ProviderTeachingClient({ ProviderConfiguration(ModelProvider.DEEPSEEK) },
+   { keyReads++; "synthetic-key" }, http, policy = ReleaseModelPolicy.unrestricted)
+  val request = QuickTranslationRequest("Bonjour", "French", "English")
+  val translated = translateForPractice(request, offlineFixture = true) { client.quickTranslate(it).text }
+  assertEquals(0, keyReads)
+  assertEquals(0, requests)
+  assertEquals("Hello!", translated)
+  assertEquals("Live translation", translateForPractice(request, offlineFixture = false) { client.quickTranslate(it).text })
+  assertEquals(1, keyReads)
+  assertEquals(1, requests)
+ }
+
  @Test fun translationOutputBudgetDoesNotChangeOtherHelpers()=runBlocking {
   for(provider in listOf(ModelProvider.OPENAI,ModelProvider.DEEPSEEK,ModelProvider.GLM,ModelProvider.GEMINI)) {
    val bodies=mutableListOf<JsonObject>()
