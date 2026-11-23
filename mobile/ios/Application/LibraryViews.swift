@@ -594,6 +594,7 @@ struct SettingsView: View {
             }
             }
         }
+        .preferredColorScheme(InterfacePreferences.shared.colorScheme)
         .sheet(isPresented: $showingKey, onDismiss: {
             hasKey = Self.initialHasKey(configuration: coordinator.modelConfiguration)
             if coordinator.requestHostedSwitch && hostedAvailable {
