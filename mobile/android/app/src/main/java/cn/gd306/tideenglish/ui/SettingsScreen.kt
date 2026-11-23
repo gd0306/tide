@@ -64,6 +64,7 @@ import androidx.compose.ui.window.DialogWindowProvider
 import cn.gd306.tideenglish.TideEnglishViewModel
 import cn.gd306.tideenglish.R
 import cn.gd306.tideenglish.core.LanguageRegistry
+import cn.gd306.tideenglish.core.VoicePauseBuffer
 import cn.gd306.tideenglish.core.MeaningLanguages
 import cn.gd306.tideenglish.core.MinuteBalanceTime
 import cn.gd306.tideenglish.core.Passage
@@ -178,11 +179,15 @@ internal fun SettingsScreen(vm: TideEnglishViewModel, onExport: () -> Unit, onIm
                     }
                     item {
                         SettingsGroup(stringResource(R.string.settings_section_conversation),
-                            stringResource(R.string.settings_session_limit_note)) {
+                            stringResource(R.string.settings_session_limit_note) + "\n" + stringResource(R.string.settings_voice_pause_note)) {
                             val limits = (listOf(5, 10, 15, 20, 30, 60) + prefs.sessionMinutes).distinct().sorted()
                             SettingsChoiceRow(stringResource(R.string.settings_conversation_limit), stringResource(R.string.settings_limit_minutes, prefs.sessionMinutes),
                                 prefs.sessionMinutes.toString(), limits.map { it.toString() to stringResource(R.string.settings_limit_minutes, it) },
                                 "settings-conversation-limit", !vm.isRunning) { vm.updatePreferences(prefs.copy(sessionMinutes = it.toInt())) }
+                            SettingsDivider()
+                            SettingsChoiceRow(stringResource(R.string.settings_voice_pause), stringResource(R.string.settings_voice_pause_seconds, prefs.effectiveVoicePauseSeconds),
+                                prefs.effectiveVoicePauseSeconds.toString(), VoicePauseBuffer.choices.map { it.toString() to stringResource(R.string.settings_voice_pause_seconds, it) },
+                                "settings-voice-pause", !vm.isRunning) { vm.updatePreferences(prefs.copy(voicePauseSeconds = it.toInt())) }
                         }
                     }
                     item {

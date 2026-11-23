@@ -1,0 +1,5 @@
+<resources>
+    <string name="settings_voice_pause">Reply wait</string>
+    <string name="settings_voice_pause_seconds">%1$d seconds</string>
+    <string name="settings_voice_pause_note">Reply wait applies to device voice, including DeepSeek. Speaking again restarts the wait.</string>
+</resources>

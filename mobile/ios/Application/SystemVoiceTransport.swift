@@ -9,6 +9,7 @@ import CoreMedia
     var onEvent: (([String: Any]) -> Void)?
     var onLevels: ((Double, Double) -> Void)?
     var onInput: ((String) -> Void)?
+    var onInputActivity: (() -> Void)?
     var onDegraded: ((String) -> Void)?
     #if DEBUG
     var onRecognitionFailure: ((String, Int) -> Void)?
@@ -77,6 +78,9 @@ import CoreMedia
     private var pcmCapture: LocalSpeechPCMStream?
     private let synthesizer = AVSpeechSynthesizer()
     private var turn = VoiceTurnState()
+    private var pauseBuffer = VoicePauseBuffer()
+    private var inputGeneration: UInt64?
+    var hasPendingInput: Bool { pauseBuffer.hasPendingInput }
     private var silenceTask: Task<Void, Never>?
     private var restartTask: Task<Void, Never>?
     private var outputActivityTask: Task<Void, Never>?
@@ -91,13 +95,14 @@ import CoreMedia
 
     override init() { super.init(); synthesizer.delegate = self }
 
-    func connect(locale: String) async throws {
+    func connect(locale: String, pauseSeconds: Int = 5) async throws {
         disconnect()
         let token = UUID(); attempt = token
         // A cancelled connect owns cleanup only while it is the current attempt.
         var connected = false
         defer { if !connected && attempt == token { disconnect() } }
         muted = false; waiting = false; turn = VoiceTurnState(); notice = nil
+        pauseBuffer = VoicePauseBuffer(seconds: pauseSeconds)
         #if DEBUG
         diagnostics = Diagnostics()
         #endif
@@ -197,10 +202,15 @@ import CoreMedia
         turn.setRequestActive(false)
         guard started, speechAvailable, turn.canListen,
               engine == nil, analyzer == nil, !startingRecognition else { return }
+        if inputGeneration == nil {
+            pauseBuffer.reset()
+            inputGeneration = turn.begin()
+            monitorPause()
+        }
         if modernLocale != nil {
             let id = UUID(); recognitionID = id
             startingRecognition = true
-            let generation = turn.begin()
+            guard let generation = inputGeneration else { return }
             segments = VoiceSegmentTranscript()
             startupTask = Task { [weak self] in
                 guard let self else { return }
@@ -244,11 +254,22 @@ import CoreMedia
             diagnostics.expectedSyntheticRecognition = diagnostics.expectedSyntheticRecognition || normalized.contains("i like coffee")
         }
         #endif
-        guard turn.update(text, generation: generation) else { return }
-        silenceTask?.cancel()
+        guard pauseBuffer.update(text, at: ProcessInfo.processInfo.systemUptime) else { return }
+        _ = turn.update(pauseBuffer.text, generation: generation)
+        onInputActivity?()
+    }
+    private func monitorPause() {
+        guard let generation = inputGeneration else { return }
         silenceTask = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(1200)) } catch { return }
-            self?.commit(generation: generation, recognitionID: id)
+            while !Task.isCancelled {
+                guard let self, self.started, !self.muted, !self.waiting,
+                      self.inputGeneration == generation, self.turn.canListen else { return }
+                if self.pauseBuffer.remaining(at: ProcessInfo.processInfo.systemUptime) == 0 {
+                    self.commit(generation: generation, recognitionID: self.recognitionID)
+                    return
+                }
+                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            }
         }
     }
     private func startModernRecognition(id: UUID, generation: UInt64) async throws {
@@ -348,6 +369,7 @@ import CoreMedia
                 self.diagnostics.conversionFailures += snapshot.failures
                 #endif
                 self.onLevels?(snapshot.level, 0)
+                if snapshot.speech { self.pauseBuffer.speech(at: ProcessInfo.processInfo.systemUptime) }
                 if snapshot.failures > 0 { self.recognitionFailed(SpeechError.conversion); return }
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
             }
@@ -364,7 +386,7 @@ import CoreMedia
         request.shouldReportPartialResults = true
         request.taskHint = .dictation
         let id = UUID(); recognitionID = id
-        let generation = turn.begin()
+        guard let generation = inputGeneration else { return }
         self.request = request; self.engine = engine
         recognitionStarted(backend: "legacy")
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self, request] buffer, _ in
@@ -372,8 +394,10 @@ import CoreMedia
             let channel = buffer.floatChannelData?[0]
             let count = Int(buffer.frameLength)
             var peak: Float = 0
-            if let channel { for index in 0..<count { peak = max(peak, abs(channel[index])) } }
+            var power: Float = 0
+            if let channel { for index in 0..<count { peak = max(peak, abs(channel[index])); power += channel[index] * channel[index] } }
             let level = Double(min(1, peak))
+            let speech = count > 0 && sqrt(power / Float(count)) > 0.01
             Task { @MainActor [weak self] in
                 guard let self, self.accepts(id) else { return }
                 #if DEBUG
@@ -382,6 +406,7 @@ import CoreMedia
                 if self.diagnostics.outputFinishes > 0 { self.diagnostics.microphoneCallbacksAfterOutput += 1 }
                 #endif
                 self.onLevels?(level, 0)
+                if speech { self.pauseBuffer.speech(at: ProcessInfo.processInfo.systemUptime) }
             }
         }
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
@@ -395,7 +420,16 @@ import CoreMedia
             Task { @MainActor [weak self] in
                 guard let self, self.started, self.recognitionID == id, !self.muted, !self.waiting else { return }
                 if let text { self.updateTranscript(text, generation: generation, id: id) }
-                if final { self.commit(generation: generation, recognitionID: id) }
+                if final {
+                    self.pauseBuffer.finishSegment()
+                    self.stopRecognition(preservingInput: true)
+                    self.restartTask = Task { [weak self] in
+                        do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                        guard let self, self.started, !self.muted, !self.waiting,
+                              self.inputGeneration == generation else { return }
+                        do { try self.startRecognition() } catch { self.recognitionFailed(error) }
+                    }
+                }
                 else if failed {
                     #if DEBUG
                     if let failureDomain, let failureCode { self.onRecognitionFailure?(failureDomain, failureCode) }
@@ -427,8 +461,12 @@ import CoreMedia
             }
         }
     }
-    private func stopRecognition() {
-        recognitionID = UUID(); turn.cancel()
+    private func stopRecognition(preservingInput: Bool = false) {
+        recognitionID = UUID()
+        if !preservingInput {
+            turn.cancel(); inputGeneration = nil; pauseBuffer.reset()
+            silenceTask?.cancel(); silenceTask = nil
+        }
         startupTask?.cancel(); startupTask = nil; startingRecognition = false
         meterTask?.cancel(); meterTask = nil
         analyzerInput?.finish(); analyzerInput = nil
@@ -452,7 +490,6 @@ import CoreMedia
         #if DEBUG
         syntheticSynthesizer.stopSpeaking(at: .immediate)
         #endif
-        silenceTask?.cancel(); silenceTask = nil
         restartTask?.cancel(); restartTask = nil
         if let engine { engine.inputNode.removeTap(onBus: 0); engine.stop() }
         engine = nil
@@ -553,7 +590,7 @@ import CoreMedia
 /// The tap owns conversion synchronously. Every yielded buffer owns independent PCM;
 /// the bounded stream cannot retain the engine's borrowed tap buffer.
 private final class LocalSpeechPCMStream: @unchecked Sendable {
-    struct Snapshot { var callbacks = 0; var frames = 0; var converted = 0; var failures = 0; var level = 0.0 }
+    struct Snapshot { var callbacks = 0; var frames = 0; var converted = 0; var failures = 0; var level = 0.0; var speech = false }
     private let lock = NSLock()
     private let target: AVAudioFormat
     private let continuation: AsyncStream<AnalyzerInput>.Continuation
@@ -570,8 +607,10 @@ private final class LocalSpeechPCMStream: @unchecked Sendable {
         counters.callbacks += 1; counters.frames += Int(input.frameLength)
         if let values = input.floatChannelData?[0] {
             var peak: Float = 0
-            for i in 0..<Int(input.frameLength) { peak = max(peak, abs(values[i])) }
+            var power: Float = 0
+            for i in 0..<Int(input.frameLength) { peak = max(peak, abs(values[i])); power += values[i] * values[i] }
             counters.level = max(counters.level, Double(min(1, peak)))
+            counters.speech = counters.speech || (input.frameLength > 0 && sqrt(power / Float(input.frameLength)) > 0.01)
         }
         if source != input.format {
             source = input.format; converter = AVAudioConverter(from: input.format, to: target)

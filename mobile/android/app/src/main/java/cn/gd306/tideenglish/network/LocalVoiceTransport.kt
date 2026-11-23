@@ -10,6 +10,7 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import cn.gd306.tideenglish.core.VoiceTurnState
+import cn.gd306.tideenglish.core.VoicePauseBuffer
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.*
@@ -22,9 +23,16 @@ class LocalVoiceTransport(context:Context,private val scope:CoroutineScope,priva
  var onLevels:((Double,Double)->Unit)?=null
  var onCapability:((String)->Unit)?=null
  var onUsage:((APIUsage)->Unit)?=null
+ var onInputActivity:(()->Unit)?=null
  private var beganAt=0L
  private val context=context.applicationContext
  private val turns=VoiceTurnState()
+ private var pauseBuffer=VoicePauseBuffer()
+ private var activeTurn:Long?=null
+ private var hearingSpeech=false
+ private var pauseJob:Job?=null
+ private var restartJob:Job?=null
+ val hasPendingInput get()=pauseBuffer.hasPendingInput
  private var recognizer:SpeechRecognizer?=null
  private var tts:TextToSpeech?=null
  private var ttsReady=false
@@ -40,9 +48,10 @@ class LocalVoiceTransport(context:Context,private val scope:CoroutineScope,priva
  private var recognizerAvailable=false
  var started=false; private set
  var isMuted=false; private set
- suspend fun connect(instructions:String,history:JsonArray=JsonArray(emptyList()),language:String?=null)=withContext(Dispatchers.Main.immediate) {
+ suspend fun connect(instructions:String,history:JsonArray=JsonArray(emptyList()),language:String?=null,pauseSeconds:Int=5)=withContext(Dispatchers.Main.immediate) {
   dispose(); beganAt=android.os.SystemClock.elapsedRealtime();clock=0; isMuted=false; turns.setMuted(false); started=true; this@LocalVoiceTransport.instructions=instructions;appendedInstructions=""
   this@LocalVoiceTransport.history=history.toString(); this@LocalVoiceTransport.language=language ?: "en-US"
+  pauseBuffer=VoicePauseBuffer(pauseSeconds)
   val current=generation
   emit("session.started")
   onCapability?.invoke("Device speech with the selected provider. Voice requires on-device recognition; typing is always available.")
@@ -71,35 +80,63 @@ class LocalVoiceTransport(context:Context,private val scope:CoroutineScope,priva
   if(!started || !recognizerAvailable || !turns.canListen) return
   recognizer?.destroy()
   if(Build.VERSION.SDK_INT<31) return
-  val turn=turns.begin(); val current=generation; val recognition=++recognitionEpoch
+  val turn=activeTurn ?: turns.begin().also { activeTurn=it; pauseBuffer.reset() }
+  val current=generation; val recognition=++recognitionEpoch
   recognizer=SpeechRecognizer.createOnDeviceSpeechRecognizer(context).apply {
    setRecognitionListener(object:RecognitionListener {
     override fun onReadyForSpeech(params:Bundle?) { }
-    override fun onBeginningOfSpeech() { if(current==generation && recognition==recognitionEpoch) onLevels?.invoke(0.15,0.0) }
+    override fun onBeginningOfSpeech() { if(current==generation && recognition==recognitionEpoch) { hearingSpeech=true;pauseBuffer.speech(now());onLevels?.invoke(0.15,0.0) } }
     override fun onRmsChanged(rmsdB:Float) { if(current==generation && recognition==recognitionEpoch) onLevels?.invoke((rmsdB/12.0).coerceIn(0.0,1.0),0.0) }
     override fun onBufferReceived(buffer:ByteArray?) { }
-    override fun onEndOfSpeech() { if(current==generation && recognition==recognitionEpoch) onLevels?.invoke(0.0,0.0) }
-    override fun onPartialResults(results:Bundle?) { if(current==generation && recognition==recognitionEpoch) turns.update(results.text(),turn) }
+    override fun onEndOfSpeech() { if(current==generation && recognition==recognitionEpoch) { hearingSpeech=false;pauseBuffer.speech(now());onLevels?.invoke(0.0,0.0) } }
+    override fun onPartialResults(results:Bundle?) { if(current==generation && recognition==recognitionEpoch) updateTranscript(results.text(),turn) }
     override fun onResults(results:Bundle?) {
      if(current!=generation || recognition!=recognitionEpoch || !started) return
-     turns.update(results.text(),turn)
-     val text=turns.commit(turn)
-     if(text!=null) request(text) else restartSoon(current)
+     updateTranscript(results.text(),turn)
+     pauseBuffer.finishSegment();hearingSpeech=false;recognitionEpoch++
+     restartSoon(current)
     }
     override fun onError(error:Int) {
      if(current!=generation || recognition!=recognitionEpoch || !started) return
-     turns.cancel(); onLevels?.invoke(0.0,0.0)
-     if(error==SpeechRecognizer.ERROR_NO_MATCH || error==SpeechRecognizer.ERROR_SPEECH_TIMEOUT) restartSoon(current)
-     else { recognizerAvailable=false; onCapability?.invoke("On-device recognition could not start. Use typing to continue with this provider.") }
+     hearingSpeech=false;recognitionEpoch++;onLevels?.invoke(0.0,0.0)
+     if(error==SpeechRecognizer.ERROR_NO_MATCH || error==SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+      pauseBuffer.discardPartial();turns.update(pauseBuffer.text,turn);restartSoon(current)
+     } else { recognizerAvailable=false;clearPendingInput();onCapability?.invoke("On-device recognition could not start. Use typing to continue with this provider.") }
     }
     override fun onEvent(eventType:Int,params:Bundle?) { }
    })
    try { startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_LANGUAGE,language).putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,true).putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE,true)) }
-   catch (_:Exception) { recognizerAvailable=false; turns.cancel(); onCapability?.invoke("On-device recognition is unavailable. Use typing to continue with this provider.") }
+   catch (_:Exception) { recognizerAvailable=false;clearPendingInput();onCapability?.invoke("On-device recognition is unavailable. Use typing to continue with this provider.") }
   }
+  if(recognizerAvailable) monitorPause(current,turn)
  }
  private fun Bundle?.text()=this?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
- private fun restartSoon(current:Long) { scope.launch(Dispatchers.Main.immediate) { delay(400); if(current==generation) startListening() } }
+ private fun now()=android.os.SystemClock.elapsedRealtime()/1000.0
+ private fun updateTranscript(text:String,turn:Long) {
+  if(pauseBuffer.update(text,now())) { turns.update(pauseBuffer.text,turn);onInputActivity?.invoke() }
+ }
+ private fun monitorPause(current:Long,turn:Long) {
+  if(pauseJob?.isActive==true) return
+  pauseJob=scope.launch(Dispatchers.Main.immediate) {
+   while(started && current==generation && turns.canListen) {
+    if(hearingSpeech) pauseBuffer.speech(now())
+    if(pauseBuffer.remaining(now())==0.0) {
+     val text=turns.commit(turn);pauseJob=null
+     if(text!=null) request(text)
+     return@launch
+    }
+    delay(100)
+   }
+  }
+ }
+ private fun clearPendingInput() {
+  pauseJob?.cancel();pauseJob=null;restartJob?.cancel();restartJob=null
+  hearingSpeech=false;activeTurn=null;pauseBuffer.reset();turns.cancel()
+ }
+ private fun restartSoon(current:Long) {
+  restartJob?.cancel()
+  restartJob=scope.launch(Dispatchers.Main.immediate) { delay(100);if(current==generation) startListening() }
+ }
  fun sendTypedText(text:String) { scope.launch(Dispatchers.Main.immediate) { if(started && text.isNotBlank()) { clock+=3;request(text.trim().take(2000),persistUser=false,appendUser=true) } } }
  fun sendInstruction(text:String,requestResponse:Boolean) { scope.launch(Dispatchers.Main.immediate) {
   if(!started) return@launch
@@ -108,6 +145,7 @@ class LocalVoiceTransport(context:Context,private val scope:CoroutineScope,priva
  } }
  private fun request(text:String,persistUser:Boolean=true,appendUser:Boolean=persistUser) {
   if(!started || requestJob?.isActive==true) return
+  clearPendingInput()
   recognitionEpoch++;recognizer?.cancel();playbackID=null;tts?.stop();turns.setOutputActive(false); turns.setRequestActive(true)
   val current=generation
   if(persistUser) transcript("input",text)
@@ -134,7 +172,7 @@ class LocalVoiceTransport(context:Context,private val scope:CoroutineScope,priva
  private fun completePlayback(id:String?) { scope.launch(Dispatchers.Main.immediate) { if(started && id!=null && id==playbackID) { playbackID=null; turns.setOutputActive(false); onLevels?.invoke(0.0,0.0); startListening() } } }
  fun setMuted(value:Boolean) { scope.launch(Dispatchers.Main.immediate) {
   if(isMuted==value) return@launch
-  isMuted=value; recognitionEpoch++;turns.setMuted(value); recognizer?.cancel()
+  isMuted=value;recognitionEpoch++;clearPendingInput();turns.setMuted(value);recognizer?.cancel()
   if(value) { generation++; playbackID=null;requestJob?.cancel(); tts?.stop(); turns.setOutputActive(false); turns.setRequestActive(false); onLevels?.invoke(0.0,0.0);emit("response.done") }
   else startListening()
  } }
@@ -142,6 +180,7 @@ class LocalVoiceTransport(context:Context,private val scope:CoroutineScope,priva
  private fun dispose() {
   if(started) onEvent?.invoke(buildJsonObject { put("type","session.usage.updated");put("usage",buildJsonObject { put("seconds",maxOf(0L,android.os.SystemClock.elapsedRealtime()-beganAt)/1000.0) }) })
   generation++;recognitionEpoch++;playbackID=null; started=false; requestJob?.cancel(); requestJob=null; turns.cancel(); turns.setRequestActive(false); turns.setOutputActive(false)
+  clearPendingInput()
   recognizer?.destroy(); recognizer=null; tts?.stop(); tts?.shutdown(); tts=null; ttsReady=false; onLevels?.invoke(0.0,0.0)
  }
  private fun transcript(kind:String,text:String) {

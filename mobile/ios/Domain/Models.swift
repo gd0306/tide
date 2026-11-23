@@ -203,6 +203,8 @@ public struct Preferences: Codable, Sendable {
     public var meaningVisible = true
     public var meaningLanguage = "English"
     public var sessionMinutes = 15
+    public var voicePauseSeconds: Int?
+    public var effectiveVoicePauseSeconds: Int { voicePauseSeconds ?? 5 }
     public var hiddenWords: [String] = []
     public var interests = ""
     public var hasOnboarded = false
@@ -281,7 +283,8 @@ public struct Archive: Codable, Sendable {
         guard LanguageRegistry.module(for: preferences.learningLanguageID) != nil else { throw ArchiveError.unsupportedLanguage }
         guard Set(sessions.map(\.id)).count == sessions.count,
               sessions.count <= Self.maximumSessions,
-              preferences.sessionMinutes >= 1, preferences.sessionMinutes <= 60 else { throw ArchiveError.invalid }
+              preferences.sessionMinutes >= 1, preferences.sessionMinutes <= 60,
+              VoicePauseBuffer.choices.contains(preferences.effectiveVoicePauseSeconds) else { throw ArchiveError.invalid }
         func validDate(_ date: Date) -> Bool { date >= .distantPast && date <= .distantFuture }
         try practice?.validate()
         for s in sessions {

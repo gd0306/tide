@@ -229,6 +229,10 @@ import TideEnglishCore
         }
         transport.onFailure = { [weak self] in self?.fail($0) }
         transport.onDegraded = { [weak self] in self?.notice = $0 }
+        transport.onInputActivity = { [weak self] in
+            guard let self, self.state == .active else { return }
+            self.activity.learnerEngaged(now: self.activityNow); self.inactivitySeconds = nil
+        }
         transport.onInput = { [weak self] text in
             guard let self, self.state == .active, !self.working else { return }
             self.fallbackPromptTask?.cancel()
@@ -367,7 +371,8 @@ import TideEnglishCore
                 }
                 guard self.session?.id == generation, self.state == .connecting else { return }
                 checkingHostedAccess = false
-                try await self.transport.connect(api: self.api, instructions: instructions, history: history, hosted: hosted, locale: self.language.locale)
+                try await self.transport.connect(api: self.api, instructions: instructions, history: history, hosted: hosted, locale: self.language.locale,
+                                                 pauseSeconds: self.store.preferences.effectiveVoicePauseSeconds)
                 self.continuationSession = nil; self.continuationOwner = nil; self.continuationReady = false
                 UserDefaults.standard.removeObject(forKey: self.continuationKey)
             }
@@ -816,7 +821,7 @@ import TideEnglishCore
                     self.notice = "You’ve reached your conversation time limit."; self.end(reason: "Time limit"); return
                 }
                 self.inactivitySeconds = nil
-                switch self.activity.tick(now: self.activityNow, muted: self.isMuted, busy: self.working || !self.delegationTasks.isEmpty) {
+                switch self.activity.tick(now: self.activityNow, muted: self.isMuted, busy: self.working || !self.delegationTasks.isEmpty || self.transport.hasPendingInput) {
                 case .checkIn: self.append("instructions", TeachingPolicy.checkIn(language: self.language))
                 case .warning(let seconds): self.inactivitySeconds = seconds
                 case .end:

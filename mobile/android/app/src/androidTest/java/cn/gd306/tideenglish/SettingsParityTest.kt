@@ -53,6 +53,19 @@ class SettingsParityTest {
         compose.onNodeWithTag("settings-screen").assertIsDisplayed()
     }
 
+    @Test fun voicePauseOffersFiveTenTwentyAndThirtySeconds() {
+        compose.runOnIdle { vm.updatePreferences(vm.archive.preferences.copy(voicePauseSeconds = null)) }
+        val settings = compose.onNodeWithTag("settings-screen")
+        settings.performScrollToNode(hasTestTag("settings-voice-pause"))
+        for (seconds in listOf(5, 10, 20, 30)) {
+            compose.onNodeWithTag("settings-voice-pause").performClick()
+            compose.onNodeWithTag("settings-voice-pause-$seconds").performScrollTo().performClick()
+            compose.runOnIdle { assertEquals(seconds, vm.archive.preferences.effectiveVoicePauseSeconds) }
+            compose.onNodeWithTag("settings-voice-pause").assertTextContains(compose.activity.getString(R.string.settings_voice_pause_seconds, seconds))
+        }
+        capture("voice-pause-thirty-seconds")
+    }
+
     @Test fun groupedSettingsKeepKeyAdvancedAndRestoreSubtitleLanguageAndMinutePreferences() {
         compose.onNodeWithText(compose.activity.getString(R.string.settings_navigation_title)).assertIsDisplayed()
         compose.onNodeWithTag("settings-screen").performScrollToNode(hasTestTag("settings-meaning-visible"))

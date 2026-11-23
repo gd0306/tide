@@ -1,0 +1,5 @@
+<resources>
+    <string name="settings_voice_pause">接话等待</string>
+    <string name="settings_voice_pause_seconds">%1$d 秒</string>
+    <string name="settings_voice_pause_note">接话等待适用于 DeepSeek 等设备语音对话。继续说话会重新计时。</string>
+</resources>
