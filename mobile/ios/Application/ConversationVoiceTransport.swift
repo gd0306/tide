@@ -8,6 +8,7 @@ import TideEnglishCore
     var onFailure: ((String) -> Void)?
     var onHostedLease: ((HostedLease) -> Void)?
     var onInput: ((String) -> Void)?
+    var onInputActivity: (() -> Void)?
     var onDegraded: ((String) -> Void)?
     private let openAI = LiveTransport()
     private let glm = GLMRealtimeTransport()
@@ -17,6 +18,7 @@ import TideEnglishCore
     private var mode: Mode = .openAI
     private var attempt = UUID()
     var isTurnBased: Bool { mode == .system }
+    var hasPendingInput: Bool { isTurnBased && system.hasPendingInput }
     var started: Bool {
         switch mode { case .openAI: openAI.started; case .glm: glm.started; case .gemini: gemini.started; case .system: system.started }
     }
@@ -36,10 +38,11 @@ import TideEnglishCore
         system.onEvent = { [weak self] in self?.onEvent?($0) }
         system.onLevels = { [weak self] in self?.onLevels?($0, $1) }
         system.onInput = { [weak self] in self?.onInput?($0) }
+        system.onInputActivity = { [weak self] in self?.onInputActivity?() }
         system.onDegraded = { [weak self] in self?.onDegraded?($0) }
     }
     func connect(api: APIClient, instructions: String, history: [[String: Any]],
-                 hosted: HostedConnectRequest? = nil, locale: String) async throws {
+                 hosted: HostedConnectRequest? = nil, locale: String, pauseSeconds: Int = 5) async throws {
         disconnect()
         let token = UUID(); attempt = token
         if hosted == nil { _ = try api.modelPolicy.requireChat(api.configuration) }
@@ -57,7 +60,7 @@ import TideEnglishCore
                 guard attempt == token else { throw CancellationError() }
                 glm.disconnect(); mode = .system
                 onDegraded?("GLM realtime is unavailable for this account. Using on-device turn-based voice with your selected GLM chat model.")
-                try await system.connect(locale: locale)
+                try await system.connect(locale: locale, pauseSeconds: pauseSeconds)
             }
         } else if api.configuration.provider == .gemini {
             mode = .gemini
@@ -67,11 +70,11 @@ import TideEnglishCore
                 guard attempt == token else { throw CancellationError() }
                 gemini.disconnect(); mode = .system
                 onDegraded?("Gemini native realtime is unavailable for this account. Using on-device turn-based voice with your selected Gemini chat model.")
-                try await system.connect(locale: locale)
+                try await system.connect(locale: locale, pauseSeconds: pauseSeconds)
             }
         } else {
             mode = .system
-            try await system.connect(locale: locale)
+            try await system.connect(locale: locale, pauseSeconds: pauseSeconds)
         }
         try Task.checkCancellation()
         guard attempt == token else { throw CancellationError() }

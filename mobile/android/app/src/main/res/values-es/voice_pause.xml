@@ -1,0 +1,5 @@
+<resources>
+    <string name="settings_voice_pause">Espera para responder</string>
+    <string name="settings_voice_pause_seconds">%1$d segundos</string>
+    <string name="settings_voice_pause_note">La espera se aplica a la voz del dispositivo, incluido DeepSeek. Si vuelves a hablar, la espera se reinicia.</string>
+</resources>

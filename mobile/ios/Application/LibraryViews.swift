@@ -543,8 +543,15 @@ struct SettingsView: View {
                     Picker(UI("Session limit"), selection: Binding(get: { store.preferences.sessionMinutes }, set: { value in store.updatePreferences { $0.sessionMinutes = value } })) {
                         ForEach([5, 10, 15, 20, 30, 60], id: \.self) { Text(UI("\($0) minutes")).tag($0) }
                     }.pickerStyle(.menu).disabled(coordinator.isRunning)
+                    Picker(UI("Reply wait"), selection: Binding(get: { store.preferences.effectiveVoicePauseSeconds }, set: { value in store.updatePreferences { $0.voicePauseSeconds = value } })) {
+                        ForEach(VoicePauseBuffer.choices, id: \.self) { Text(UI("\($0) seconds")).tag($0) }
+                    }.pickerStyle(.menu).disabled(coordinator.isRunning).accessibilityIdentifier("settings-voice-pause")
+                        .accessibilityValue(UI("\(store.preferences.effectiveVoicePauseSeconds) seconds"))
                 } header: { Text(UI("Conversation")) } footer: {
-                    Text(UI(hostedAvailable ? "Ends one conversation after the selected time. Your available Tide minutes are separate." : "Ends one conversation after the selected time."))
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(UI(hostedAvailable ? "Ends one conversation after the selected time. Your available Tide minutes are separate." : "Ends one conversation after the selected time."))
+                        Text(UI("Reply wait applies to device voice, including DeepSeek. Speaking again restarts the wait."))
+                    }
                 }
                 Section(UI("Your data")) {
                     NavigationLink(UI("Learning backup & data")) { LearningBackupView(coordinator: coordinator) }

@@ -341,6 +341,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
         localVoice.onCapability = { notice = localizeAuthored(if (nativeFallback) "Native voice is unavailable for this account. $it" else it) }
         nativeVoice.onCapability = { notice = localizeAuthored(it) }
         localVoice.onUsage = { usage -> if (isRunning && alternativeVoice == "local") updateSession { addUsage(it, usage) } }
+        localVoice.onInputActivity = { if (state == "active") { activity.learnerEngaged(activityNow()); inactivitySeconds = null } }
         val levels: (Double, Double) -> Unit = { input, output ->
             inputLevel = input; outputLevel = output
             if (state == "active" && voiceSession) {
@@ -1089,11 +1090,11 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
                             nativeVoice.close(); alternativeVoice = "local"
                             nativeFallback = true
                             notice = "Native voice is unavailable for this account. Using device speech with the same selected provider."
-                            localVoice.connect(instructions, history, module.locale)
+                            localVoice.connect(instructions, history, module.locale, archive.preferences.effectiveVoicePauseSeconds)
                         }
                     } else {
                         alternativeVoice = "local"
-                        localVoice.connect(instructions, history, module.locale)
+                        localVoice.connect(instructions, history, module.locale, archive.preferences.effectiveVoicePauseSeconds)
                     }
                     return@launch
                 }
@@ -1298,7 +1299,7 @@ class TideEnglishViewModel(application: Application) : AndroidViewModel(applicat
                     notice = localizedContext().getString(R.string.notice_time_limit_reached); end("Time limit"); break
                 }
                 inactivitySeconds = null
-                if (voiceSession) when (val next = activity.tick(activityNow(), isMuted, working || delegations.isNotEmpty())) {
+                if (voiceSession) when (val next = activity.tick(activityNow(), isMuted, working || delegations.isNotEmpty() || (alternativeVoice == "local" && localVoice.hasPendingInput))) {
                     ConversationActivity.Action.CheckIn -> if (alternativeVoice != null) alternativeInstruction(TeachingPolicy.checkIn(language), true)
                         else command("instructions", TeachingPolicy.checkIn(language))
                     is ConversationActivity.Action.Warning -> inactivitySeconds = next.seconds

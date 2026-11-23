@@ -156,8 +156,9 @@ data class SessionRecord(
 data class Preferences(
     var learningLanguageID: String = LanguageRegistry.defaultID, var meaningVisible: Boolean = true,
     var meaningLanguage: String = "English", var sessionMinutes: Int = 15, var hiddenWords: List<String> = emptyList(),
-    var interests: String = "", var hasOnboarded: Boolean = false, var aiConsentVersion: Int? = null
-)
+    var interests: String = "", var hasOnboarded: Boolean = false, var aiConsentVersion: Int? = null,
+    var voicePauseSeconds: Int? = null
+) { val effectiveVoicePauseSeconds get() = voicePauseSeconds ?: 5 }
 @Serializable data class Archive(var schemaVersion: Int = 2, var sessions: MutableList<SessionRecord> = mutableListOf(), var preferences: Preferences = Preferences(), var practice: PracticeLibrary? = null)
 class ArchiveError private constructor(val kind: Kind) : Exception() {
     enum class Kind { TOO_LARGE, UNSUPPORTED_VERSION, UNSUPPORTED_LANGUAGE, INVALID }
@@ -233,6 +234,10 @@ object ArchiveCodec {
         fields(root, "schemaVersion sessions preferences")
         val preferences = root.getValue("preferences").jsonObject
         fields(preferences, "learningLanguageID meaningVisible meaningLanguage sessionMinutes hiddenWords interests hasOnboarded")
+        preferences["voicePauseSeconds"]?.takeUnless { it == JsonNull }?.let {
+            val value = it as? JsonPrimitive ?: throw ArchiveError.INVALID
+            if (value.isString || value.intOrNull !in VoicePauseBuffer.choices) throw ArchiveError.INVALID
+        }
         root["practice"]?.takeUnless { it == JsonNull }?.jsonObject?.let { p ->
             fields(p, "expressions corrections")
             val jsonNumber = Regex("""-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?""")
@@ -269,7 +274,7 @@ object ArchiveCodec {
     }
     private fun validate(a: Archive) {
         if (LanguageRegistry.get(a.preferences.learningLanguageID) == null) throw ArchiveError.UNSUPPORTED_LANGUAGE
-        if (a.schemaVersion != 2 || a.sessions.size > MAXIMUM_SESSIONS || a.preferences.sessionMinutes !in 1..60 || a.sessions.map { it.id.lowercase() }.toSet().size != a.sessions.size) throw ArchiveError.INVALID
+        if (a.schemaVersion != 2 || a.sessions.size > MAXIMUM_SESSIONS || a.preferences.sessionMinutes !in 1..60 || a.preferences.effectiveVoicePauseSeconds !in VoicePauseBuffer.choices || a.sessions.map { it.id.lowercase() }.toSet().size != a.sessions.size) throw ArchiveError.INVALID
         a.practice?.validate()
         a.sessions.forEach { s ->
             if (s.practiceKind != null && s.practiceKind !in listOf("daily", "correction")) throw ArchiveError.INVALID

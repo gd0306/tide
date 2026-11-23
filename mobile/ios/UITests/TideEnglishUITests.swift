@@ -725,6 +725,13 @@ final class TideEnglishUITests: XCTestCase {
         revealInterfaceControl(grove, in: app)
         grove.tap()
         XCTAssertTrue(grove.isSelected)
+        let pause = app.buttons["settings-voice-pause"]
+        revealInterfaceControl(pause, in: app)
+        XCTAssertEqual(pause.value as? String, "5 秒")
+        pause.tap()
+        app.buttons["30 秒"].tap()
+        XCTAssertEqual(pause.value as? String, "30 秒")
+        keepVocabularyScreenshot(app, name: "voice-pause-chinese-large-type")
     }
 
     private func revealInterfaceControl(_ element: XCUIElement, in app: XCUIApplication) {
